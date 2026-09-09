@@ -1,0 +1,17 @@
+# Keep native subprocesses outside Dart's process-wide SIGCHLD reaper.
+[Unit]
+Description=Tempo native hardware broker and metrics collector
+Requires=tempod.socket tempo-modem-bootstrap.service
+After=local-fs.target tempod.socket tempo-modem-bootstrap.service
+
+[Service]
+Type=exec
+ExecStart=/usr/local/lib/tempod/bin/tempod-native
+Restart=always
+RestartSec=2
+StateDirectory=tempod
+RuntimeDirectory=tempod
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[package]
+name = "tempo-kms"
+description = "The KMS plumbing shared by the Tempo device tools: open the card, find the panel, its mode and a CRTC"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+drm.workspace = true

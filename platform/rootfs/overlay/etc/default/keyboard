@@ -1,0 +1,9 @@
+# Keyboard layout, in the format keyboard-configuration would write. Nothing
+# on the device reads it but flutter-pi, which loads it for its xkb keymap and
+# logs an error for every value it cannot find (all four are required, quoted).
+# There is no keyboard on the Y2; this only keeps the log clean and gives a
+# plugged-in USB one a sane default.
+XKBMODEL="pc105"
+XKBLAYOUT="us"
+XKBVARIANT=""
+XKBOPTIONS=""

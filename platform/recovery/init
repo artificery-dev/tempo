@@ -1,0 +1,26 @@
+#!/bin/sh
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs tmpfs /run
+# The recovery display starts after the USB shell, so display diagnostics
+# remain accessible if initialization fails.
+# No root search, automount, installer, or switch_root. Storage stays unmounted.
+# MMC probing is asynchronous and may finish just after /init starts.
+i=0
+while [ ! -b /dev/mmcblk0boot1 ] && [ "$i" -lt 10 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+for disk in /sys/class/block/mmcblk*; do
+    [ -b "/dev/${disk##*/}" ] && /bin/busybox blockdev --setro "/dev/${disk##*/}"
+done
+echo 'TEMPO_RAMBOOT_READY: diagnostic initramfs; storage unmounted' > /dev/kmsg
+cat /proc/partitions
+# Gadget console provides a second way to verify the RAM-only environment.
+(while [ ! -c /dev/ttyGS0 ]; do sleep 1; done
+ while true; do /bin/busybox setsid /bin/sh -c 'exec /bin/sh </dev/ttyGS0 >/dev/ttyGS0 2>&1'; sleep 1; done) &
+/bin/start-display > /run/display.log 2>&1 &
+/bin/start-usb > /run/usb.log 2>&1 &
+exec /bin/sh

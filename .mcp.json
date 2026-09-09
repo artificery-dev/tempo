@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "tempo-emulator": {
+      "command": "fvm",
+      "args": [
+        "dart",
+        "run",
+        "toolbox/tool/emulator/emulator_mcp.dart"
+      ],
+      "env": {
+        "TEMPO_EMULATOR_VM_FILE": "${HOME}/.cache/tempo/emulator-vm.url"
+      }
+    }
+  }
+}

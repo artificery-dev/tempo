@@ -1,0 +1,27 @@
+# The Dart side of the workspace: one resolution for the app, the shared UI,
+# the daemon, and the handoff package, so they all see one version of every
+# dependency and one .dart_tool at the root. Toolbox resolves independently
+# using toolbox/app/.fvmrc, including its embedded emulator.
+name: tempo_workspace
+description: >-
+  Tempo's pub workspace: the on-device app, the UI it shares with the desktop
+  emulator, the headless daemon, and their shared Dart packages.
+publish_to: none
+
+environment:
+  sdk: ^3.12.2
+
+workspace:
+  - app
+  - assets
+  - daemon
+  - packages/daemon_client
+  - packages/flutter_pi_plymouth_handoff
+  - packages/player_api
+  - packages/tempo_core
+  - packages/tempo_logger
+
+# Component tool entry points share the workspace package configuration.
+dev_dependencies:
+  tempo_build:
+    path: packages/tempo_build

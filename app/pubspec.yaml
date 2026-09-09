@@ -1,0 +1,43 @@
+name: tempo
+description: >-
+  Tempo: the Innioasis Y2's home experience, run by flutter-pi on the
+  mainline kernel's KMS pipeline.
+version: 0.1.0
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  player_api:
+    path: ../packages/player_api
+  daemon_client:
+    path: ../packages/daemon_client
+  flutter:
+    sdk: flutter
+  # Every screen the player shows, shared with the emulator so the two run
+  # the same UI rather than two that resemble each other.
+  tempo_core:
+    path: ../packages/tempo_core
+  # Published widgets-layer design system; no desktop plugin on the device.
+  tomeui: ^0.3.0
+  # Seamless boot: hand the panel off from the plymouth splash at our first
+  # frame (paired with the native flutter-pi plugin).
+  flutter_pi_plymouth_handoff:
+    path: ../packages/flutter_pi_plymouth_handoff
+  flutterpi_gstreamer_video_player: ^0.2.0
+
+dev_dependencies:
+  tempo_build:
+    path: ../packages/tempo_build
+  tempod:
+    path: ../daemon
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  # The swirl travels with tempo_core, so the package that draws it is the
+  # package that ships it.
+  uses-material-design: false

@@ -1,0 +1,22 @@
+# Copy to config.local.yaml (gitignored) and fill in. Values here are deep-merged
+# over config.yaml, so you only need the keys you are setting.
+#
+#   cp config.local.example.yaml config.local.yaml
+#
+# A rootfs build with neither a password nor an SSH key fails with an error
+# rather than shipping a guessable credential.
+
+user:
+  # Plaintext; the builder hashes it with openssl passwd -6 before it reaches
+  # the image. Leave unset to create the account with a locked password and
+  # rely on ssh_keys alone.
+  password: change-me
+
+  # Authorized keys for the default user. Each entry is one of:
+  #   the key itself      ssh-ed25519 AAAAC3Nz... you@host
+  #   a path to a file    ~/.ssh/id_ed25519.pub
+  #   a file reference    {{ file(~/.ssh/id_ed25519.pub) }}
+  # Files may hold several keys; every non-comment line is taken as one.
+  ssh_keys: []
+  # ssh_keys:
+  #   - "{{ file(~/.ssh/id_ed25519.pub) }}"

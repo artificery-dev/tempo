@@ -1,0 +1,41 @@
+# Local planning scratchpad
+/TASKS*
+.env*
+!.env.example
+!.env.device.example
+
+/archive/
+
+
+# Build output
+build/
+
+# Rust
+target/
+
+# Dart / Flutter
+.dart_tool/
+# fvm's per-project SDK symlink; the pin itself is .fvmrc.
+.fvm/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Node tooling
+node_modules/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+
+# Python bytecode from archived experiments
+__pycache__/
+
+# Local configuration overlay: secrets, never committed.
+/config.local.yaml
+
+# Device-specific modem calibration fixtures survive build/ cleanup but are
+# provisioned locally, like config.local.yaml, rather than published in git.
+/platform/firmware/local/
+
+# Local rendering caches
+/.cache/

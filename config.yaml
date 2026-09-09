@@ -1,0 +1,360 @@
+# Tempo workspace configuration.
+#
+# Every build script reads this file. Secrets do not live here: this file is
+# tracked and the repository is public. Put the default user's password and SSH
+# keys in config.local.yaml, which is gitignored and deep-merged over this one.
+# See config.local.example.yaml, and run `just secrets hash` once you have.
+
+device:
+  # Hostname, and the name written into /etc/hosts.
+  hostname: tempo
+
+  # eMMC layout facts the flashing tools (toolbox dev dist, toolbox dev device ...) rely
+  # on. Every offset is a physical byte offset into the eMMC USER area, i.e.
+  # into /dev/mmcblk0 as the running kernel sees it - not the scatter file's
+  # linear_start_addr, which is 0x1400000 higher (see
+  # docs/platform/boot-and-flashing.md).
+  partitions:
+    # Size of the USER area. Sanity check before any write: a device whose
+    # /dev/mmcblk0 is a different size is not a Y2 and is refused.
+    emmc_size: 0x1d2000000
+    # Tempo's on-disk MBR exposes the root filesystem as mmcblk0p1.
+    # Keep these bounds aligned with TempoLayout in tempo_build.
+    rootfs_offset: 0x5180000
+    rootfs_size: 0x1cce80000
+    # Where LK really reads the boot image from on a running device. This is
+    # NOT the scatter's BOOTIMG physical_start_addr (0x1d80000): the live
+    # layout is shifted, and 0x2900000 is where the running kernel was found,
+    # verified empirically (dd bs=4096 seek=10496). toolbox dev device flash-boot
+    # writes here; SP Flash Tool resolves the address itself and is unaffected.
+    bootimg_offset: 0x2900000
+    # The BOOTIMG partition size from the scatter. A larger image is refused.
+    bootimg_size: 0x1000000
+    # The LOGO partition size from the scatter. The live partition is located
+    # by scanning for its header (see platform/splash/README.md) rather than by
+    # address, and this bounds how much may be written at the hit.
+    logo_size: 0x300000
+    # How far into the eMMC that scan looks. Every static partition sits well
+    # inside the first 192 MiB.
+    logo_scan_size: 0xc000000
+
+user:
+  # The default, unprivileged user. The Tempo frontend runs as this account;
+  # anything needing privilege goes through tempod, not through this user.
+  # This is the only account ever autologged in on a console - never root,
+  # regardless of permit_root_login below.
+  name: tempo
+  uid: 1000
+  gid: 1000
+  gecos: Tempo
+  shell: /bin/zsh
+
+  # Membership of the sudo group. tempod is the privilege escalation path for
+  # the application; sudo is here for you, at a shell.
+  sudoer: true
+  # Let that sudo run without a password. The only link onto the device is the
+  # USB gadget cable, and the host-side tooling (toolbox dev device flash-boot, the
+  # rootfs install over the microSD, ...) needs root on the device without a
+  # prompt in the middle of a dd. Set false to be asked, at the cost of that
+  # tooling needing another way in.
+  passwordless_sudo: true
+
+  # Supplementary groups. video and render give the frontend DRM/GBM access to
+  # the panel and the Mali GPU; input lets it read the wheel and buttons
+  # without root.
+  groups:
+    - video
+    - render
+    - input
+    - audio
+    - plugdev
+    - dialout
+    # wpa_supplicant's per-interface control socket is root:netdev. Tempo's
+    # WiFi settings use wpa_cli rather than a privileged helper.
+    - netdev
+    # PipeWire's own group: /etc/security/limits.d lets its members take
+    # realtime priority (rtprio 95, nice -19, memlock), which is how the
+    # sound server's data threads - and the frontend's libmpv output
+    # thread, in the same session - stay ahead of a busy core. Without it
+    # every audio thread is time-shared and the headphones crackle the
+    # moment the UI or a scan works. Granted after the packages are in
+    # (the group is pipewire's).
+    - pipewire
+
+  # password and ssh_keys come from config.local.yaml. A build with neither
+  # configured fails rather than shipping a guessable credential.
+
+shell:
+  # Install Oh My Zsh into the image. Installed per user, into each home
+  # directory, for both root and the default user above - never as one shared
+  # tree. A shared install would need sudo to update and would let anyone who
+  # can write it run code as everyone who sources it.
+  setup_oh_my_zsh: true
+  oh_my_zsh_theme: ys
+  oh_my_zsh_plugins:
+    - git
+    - sudo
+    - systemd
+    - colored-man-pages
+    - extract
+    - safe-paste
+
+networking:
+  # The USB CDC-ECM gadget link. This is the device side; the host gets a DHCP
+  # lease from us, so `ssh <user>@10.42.0.1` works with no host-side setup.
+  # systemd-networkd serves DHCP itself - NetworkManager and dnsmasq are
+  # deliberately not installed.
+  usb_gadget:
+    interface: usb0
+    address: 10.42.0.1/24
+    dhcp_server: true
+
+  # The MT6582 full-MAC interface. WMT power is enabled by the
+  # mt6582-wifi-power service; wpa_supplicant owns association and networkd
+  # supplies DHCP once a profile has been selected.
+  wifi:
+    interface: wlan0
+
+  # Written to /etc/systemd/resolved.conf.
+  dns:
+    - 9.9.9.9
+    - 1.1.1.1
+
+  # Zeroconf, via avahi. Advertises <device.hostname>.local and resolves other
+  # .local names, so the device is reachable as tempo.local without knowing its
+  # address. Most useful once wifi is up, but it works over the USB gadget link
+  # today.
+  #
+  # avahi rather than systemd-resolved because browsing matters: resolved can
+  # resolve a service name it is handed, but has no avahi-browse equivalent for
+  # enumerating what is on the network - which is what discovering DLNA/AirPlay
+  # targets and printers needs.
+  #
+  # The two cannot both run: they bind the same UDP 5353, and whichever loses
+  # the race silently stops answering. avahi owns mDNS here, so the builder
+  # writes MulticastDNS=no into resolved.conf and leaves it off the per-link
+  # .network files. resolved keeps doing unicast DNS; only mDNS moves to avahi.
+  # Name resolution order: the builder pins mdns4_minimal (from libnss-mdns)
+  # right after files in nsswitch.conf, so .local goes to avahi and every
+  # other name falls through to dns - which is resolved's stub listener, via
+  # /etc/resolv.conf. (bookworm ships the resolve NSS module separately, as
+  # libnss-resolve; it is not needed for this and is not installed.)
+  # Service advertisement is managed by the Tempo UI on the device, not from
+  # here: this only decides whether avahi runs at all.
+  mdns:
+    enabled: true
+
+firewall:
+  # ufw. Off in spirit until there is a real network to defend against: today
+  # the only link is the USB gadget cable, which is trusted outright.
+  enabled: true
+  default_incoming: deny
+  default_outgoing: allow
+
+  # Interfaces trusted completely - every inbound packet allowed, no port
+  # rules consulted. The gadget link is a direct cable to a machine you
+  # already control, and it is currently the only way onto the device, so a
+  # port-by-port policy there buys nothing and risks locking you out.
+  # Keep this in step with networking.usb_gadget.interface.
+  trusted_interfaces:
+    - usb0
+
+  # Port rules for every other interface. Empty means nothing inbound is
+  # accepted off-cable, which is the right posture until wifi exists. When it
+  # does, note that ssh over wifi stays blocked until 22/tcp is added here.
+  allow: []
+
+rootfs:
+  # Provisioned calibration capture for this Y2; validated and embedded by
+  # platform/bluetooth/tool/build.dart. Kept outside disposable build output.
+  bluetooth_bootstrap_fixture: platform/firmware/local/mt6582-modem-bootstrap
+  suite: bookworm
+  mirror: http://deb.debian.org/debian
+  arch: armhf
+  # Roomy enough for the toolchains below; the initramfs grows the filesystem
+  # to fill its ~7.2GB partition on first boot.
+  size_mb: 4096
+  label: tempo-root
+  locale: en_US.UTF-8
+  timezone: UTC
+
+  # sshd PermitRootLogin. Root is never autologged in on any console
+  # regardless of this setting - only the uid-1000 user above is.
+  permit_root_login: false
+
+  packages:
+    # Pulled in by debootstrap itself, before the second stage.
+    bootstrap:
+      - systemd-sysv
+      - udev
+      - kmod
+      - iproute2
+      - iputils-ping
+      - passwd
+      - login
+      - util-linux
+      - systemd-timesyncd
+      - tzdata
+      - e2fsprogs
+
+    # Installed in the chroot afterwards, under qemu emulation (slow).
+    # Networking is systemd-networkd + systemd-resolved, both shipped with
+    # systemd itself, so nothing is needed here for the gadget link.
+    system:
+      # resolved is not in the bootstrap set above: it depends on the virtual
+      # default-dbus-system-bus, which debootstrap --include cannot resolve
+      # (the second stage fails on it). apt can, and dbus is named outright
+      # since resolved, avahi and logind all want the system bus.
+      - dbus
+      # The per-user systemd instance: pam_systemd is what creates
+      # /run/user/<uid> and lets user@<uid> start, which PipeWire (below)
+      # lives in; dbus-user-session gives that instance its session bus.
+      - libpam-systemd
+      - dbus-user-session
+      - systemd-resolved
+      - wpasupplicant
+      - iw
+      - openssh-server
+      - openssh-client
+      - sudo
+      # locale-gen lives here; without it rootfs.locale is never generated.
+      - locales
+      - plymouth
+      - plymouth-themes
+      - ca-certificates
+      - gnupg
+      # Zeroconf. libnss-mdns is what actually makes `ping something.local`
+      # work: it adds mdns4_minimal to nsswitch.conf. avahi-utils brings
+      # avahi-browse / avahi-resolve, which are the point of choosing avahi.
+      - avahi-daemon
+      - avahi-utils
+      - libnss-mdns
+      # Firewall. ufw pulls iptables in as a dependency, but name it so the
+      # backend is not an accident of dependency resolution.
+      - ufw
+      - iptables
+
+    # Mesa: lima for the Mali-400, plus EGL/GLES for flutter-pi.
+    graphics:
+      - libgl1-mesa-dri
+      - libegl1
+      - libgles2
+      - libglx-mesa0
+      - mesa-utils
+      - mesa-utils-bin
+      # flutter-pi's input and keymap runtime (the wheel and buttons come in
+      # through libinput; xkbcommon reads /etc/default/keyboard). Its other
+      # libraries - drm, gbm, udev, systemd - are already here via mesa and
+      # the base system.
+      - libinput10
+      - libxkbcommon0
+
+    # Audio. PipeWire is the sound server (routing, per-stream volumes, and
+    # later Bluetooth through the same graph); WirePlumber is its session
+    # manager, pipewire-alsa/-pulse catch clients speaking the older APIs.
+    # alsa-utils is for bring-up at a shell (aplay, amixer, speaker-test).
+    # PipeWire runs in the default user's own systemd instance (lingering,
+    # see platform/rootfs/tool/build.dart), which is where the frontend finds it.
+    audio:
+      - pipewire
+      - pipewire-alsa
+      - pipewire-pulse
+      - wireplumber
+      - alsa-utils
+      # The player: media_kit drives libmpv over dart:ffi, audio only, and
+      # mpv finds PipeWire in the user's session by itself.
+      - libmpv2
+      # flutter-pi's texture-backed video player and common file codecs.
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-libav
+      - gstreamer1.0-gl
+      - gstreamer1.0-pulseaudio
+
+    # Bluetooth. bluez is the stack itself (bluetoothd, bluetoothctl, and the
+    # kernel's hci0 is what it drives); libspa-0.2-bluetooth is the PipeWire
+    # plug-in that turns a paired speaker into a sink, so A2DP arrives in the
+    # same graph as everything else. bluez-tools is for bring-up at a shell.
+    bluetooth:
+      - bluez
+      - libspa-0.2-bluetooth
+      - bluez-tools
+
+    # Convenience tooling. Trim freely; none of it is load-bearing.
+    # git and curl are needed on-device if you want to update Oh My Zsh there.
+    tools:
+      - zsh
+      - git
+      - curl
+      - wget
+      - vim
+      - micro
+      - less
+      - most
+      - nano
+      - htop
+      - tmux
+      - file
+      - unzip
+      - zip
+      - rsync
+      - jq
+      - tree
+      - ncdu
+      - usbutils
+      - pciutils
+      - lsof
+      - strace
+      - sqlite3
+      - bash-completion
+      - man-db
+
+flutter:
+  # The SDK and the engine binaries are pinned together: flutter-pi loads
+  # ardera's prebuilt libflutter_engine.so, and the AOT snapshot the app ships
+  # must come from the gen_snapshot of exactly that engine. Do not move to
+  # 3.47: its WindowingOwnerLinux asserts on an engineId flutter-pi does not
+  # provide (see docs/app/flutter-pi.md).
+  sdk_version: 3.44.9
+  engine_binaries:
+    repo: https://github.com/ardera/flutter-engine-binaries-for-arm.git
+    commit: 274423198d44945640bc0b0fcb4b27a164c804c9
+  flutter_pi:
+    repo: https://github.com/ardera/flutter-pi.git
+    commit: f0b333052f4e71e51f9049e5016082357175057a
+  # The panel framebuffer is RGB565; the wrong format gives a garbled screen.
+  pixel_format: RGB565
+  # Where the runtime lands on the device. tempo.service and the Dart launcher in
+  # platform/rootfs/overlay use these same paths.
+  install:
+    flutter_pi: /usr/local/bin/flutter-pi
+    engine_dir: /usr/lib
+    icudtl: /usr/share/flutter/icudtl.dat
+    bundle: /opt/tempo/flutter_assets
+  # Holding both volume keys at boot starts the debug (JIT) build with the
+  # Dart VM service on this port, bound to the gadget link.
+  vm_service_port: 41200
+
+firmware:
+  # Public firmware release version; Git identity is separate commit metadata.
+  version: 0.9.0
+  # Where the vendor's own partition images live: the preloader, the partition
+  # tables, LK and the security region, which are not ours to build. `toolbox dev
+  # dist --full` takes the boot chain from here, so its bundle lands on a device in
+  # any state instead of assuming a working bootloader is already there. Vendor
+  # binaries, carried through Git LFS. Relative to the root.
+  stock_rom: platform/firmware/stock
+
+daemon:
+  # Independent host compiler; never changes the app/engine pairing.
+  dart_version: 3.13.2
+  toolchain_version: 3.47.2
+  # tempod, the privileged device/service daemon. The frontend talks to it
+  # over this socket (root-owned, group = user.name, mode 0660): the plymouth
+  # -> flutter-pi display hand-off, and later apt/networkd/bluetooth brokering.
+  socket: /run/tempod/tempod.sock
+  # Where tempod keeps its metrics store (battery, charge, ...).
+  state_dir: /var/lib/tempod
+  # Seconds between metric samples.
+  sample_interval: 30

@@ -1,0 +1,32 @@
+# tempod - the Tempo device and service daemon.
+#
+# Runs as root on purpose: the plymouth -> frontend display hand-off needs
+# CAP_SYS_ADMIN for DRM_IOCTL_SET_MASTER, and the brokered services it grows
+# into (apt, networkd, bluetoothctl) need root too. Do not harden this unit
+# with User= or a capability bounding set that drops CAP_SYS_ADMIN: the
+# hand-off then fails with EACCES and the boot never leaves the splash.
+#
+# Installed as-is by the rootfs builder, alongside tempod.socket.
+[Unit]
+Description=tempod - Tempo device and service daemon
+After=local-fs.target tempod-native.service
+Requires=tempod-native.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
+ExecStartPre=/usr/local/sbin/tempod --init-credentials
+ExecStart=/usr/local/sbin/tempod --token-file /var/lib/tempod/credentials/api-token --owner-token-file /var/lib/tempod/credentials/owner-token --radios --bluetooth-player
+Restart=always
+RestartSec=2
+# /var/lib/tempod (the metrics database) and /run/tempod (the socket's
+# directory). Preserve the runtime directory across restarts: without that,
+# systemd removes /run/tempod when the service stops and takes the socket
+# file the .socket unit is listening on with it.
+StateDirectory=tempod
+RuntimeDirectory=tempod
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target

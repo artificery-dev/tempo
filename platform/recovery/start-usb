@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+mount -t configfs none /sys/kernel/config
+mkdir -p /sys/kernel/config/usb_gadget/tempo
+cd /sys/kernel/config/usb_gadget/tempo
+# Development identity inherited from the existing Linux recovery gadget.
+echo 0x0525 > idVendor
+echo 0xa4aa > idProduct
+echo 0x0200 > bcdUSB
+echo 0x0100 > bcdDevice
+mkdir -p strings/0x409
+echo Tempo > strings/0x409/manufacturer
+echo Recovery > strings/0x409/product
+echo tempo-recovery > strings/0x409/serialnumber
+mkdir -p configs/c.1/strings/0x409
+echo 'Recovery transfer and diagnostics' > configs/c.1/strings/0x409/configuration
+echo 500 > configs/c.1/MaxPower
+mkdir -p functions/acm.console functions/ffs.tempo
+ln -s functions/acm.console configs/c.1/
+ln -s functions/ffs.tempo configs/c.1/
+mkdir -p /dev/ffs-tempo
+mount -t functionfs tempo /dev/ffs-tempo
+/bin/recovery-transfer --allow-boot-writes > /run/transfer.log 2>&1 &
+i=0
+while [ ! -f /run/transfer-ready ]; do
+    i=$((i + 1))
+    [ "$i" -lt 100 ] || exit 1
+    usleep 100000
+done
+set -- /sys/class/udc/*
+[ -e "$1" ]
+echo "${1##*/}" > UDC

@@ -1,0 +1,55 @@
+diff --git a/src/plugins/gstreamer_video_player/frame.c b/src/plugins/gstreamer_video_player/frame.c
+index 66498ce..798b434 100644
+--- a/src/plugins/gstreamer_video_player/frame.c
++++ b/src/plugins/gstreamer_video_player/frame.c
+@@ -551,6 +551,7 @@ static int
+ get_plane_infos(GstBuffer *buffer, const GstVideoInfo *info, struct gbm_device *gbm_device, struct plane_info plane_infos[MAX_N_PLANES]) {
+     GstVideoMeta *meta;
+     GstMemory *memory;
++    GstMemory *exported_memories[MAX_N_PLANES] = { 0 };
+     gboolean gst_ok;
+     size_t plane_sizes[4] = { 0 };
+     bool has_plane_sizes;
+@@ -647,9 +648,20 @@ get_plane_infos(GstBuffer *buffer, const GstVideoInfo *info, struct gbm_device *
+ 
+                 plane_infos[i].fd = ok;
+             } else {
+-                /// TODO: When duping, duplicate all non-dmabuf memories into one
+-                /// gbm buffer instead.
+-                ok = dup_gst_memory_as_dmabuf(gbm_device, memory);
++                // Software I420 commonly stores all three planes in one
++                // GstMemory. Export that allocation once, then share it with
++                // each plane's own offset instead of copying the entire frame
++                // three times into uncached GBM buffers.
++                int previous = -1;
++                for (int j = 0; j < i; j++) {
++                    if (exported_memories[j] == memory) {
++                        previous = j;
++                        break;
++                    }
++                }
++                ok = previous >= 0
++                    ? dup(plane_infos[previous].fd)
++                    : dup_gst_memory_as_dmabuf(gbm_device, memory);
+                 if (ok < 0) {
+                     LOG_ERROR("Could not duplicate gstreamer memory as dmabuf.\n");
+                     ok = EIO;
+@@ -657,6 +669,7 @@ get_plane_infos(GstBuffer *buffer, const GstVideoInfo *info, struct gbm_device *
+                 }
+ 
+                 plane_infos[i].fd = ok;
++                exported_memories[i] = memory;
+             }
+ 
+             offset_in_memory += memory->offset;
+@@ -673,8 +686,8 @@ get_plane_infos(GstBuffer *buffer, const GstVideoInfo *info, struct gbm_device *
+         continue;
+ 
+ fail_close_fds:
+-        for (int j = i - 1; j > 0; j--) {
+-            close(plane_infos[i].fd);
++        for (int j = i - 1; j >= 0; j--) {
++            close(plane_infos[j].fd);
+         }
+         return ok;
+     }

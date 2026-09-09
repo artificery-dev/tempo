@@ -1,0 +1,16 @@
+# gen_init_cpio manifest for the kernel's built-in initramfs
+# (CONFIG_INITRAMFS_SOURCE). @ROOT@ (the workspace root) and @INIT@ (the
+# rendered init) are substituted by the shared Dart initramfs renderer, which writes
+# the resolved copy to build/initramfs/.
+# Absolute paths resolve inside the tempo-toolchain container, which bind-mounts the
+# workspace at its real path. Device nodes are declared here so the build needs
+# no root.
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+nod /dev/null 0666 0 0 c 1 3
+dir /proc 0755 0 0
+dir /sys 0755 0 0
+dir /bin 0755 0 0
+file /bin/busybox @ROOT@/platform/rootfs/initramfs/busybox/busybox-armv7l 0755 0 0
+slink /bin/sh busybox 0777 0 0
+file /init @INIT@ 0755 0 0

@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+for module in drm_kms_helper drm_display_helper mtk-smi panel-gc9503v mediatek-drm; do
+    name=$(echo "$module" | tr '-' '_')
+    [ ! -d "/sys/module/$name" ] || continue
+    echo "Recovery: loading $module"
+    echo "Recovery: loading $module" > /dev/kmsg
+    if [ "$module" = mediatek-drm ]; then
+        # MT6582 DSI registers are inaccessible until its PHY is powered.
+        insmod "/modules/$module.ko" bringup_phy=1 bringup_rate=328344000
+    else
+        insmod "/modules/$module.ko"
+    fi
+done
+# GPIO112 must route the MMSYS LCM reset signal to the panel. DA leaves it
+# as GPIO input; LK normally supplies this setup. Change only this mux field.
+devmem 0x10005768 32 0x1c0
+devmem 0x10005764 32 0x40
+# The display power domain and clocks are now available. Match LK's reset.
+devmem 0x1400013c 32 1
+usleep 10000
+devmem 0x1400013c 32 0
+usleep 10000
+devmem 0x1400013c 32 1
+usleep 120000
+echo 'Recovery: starting DRM UI'
+exec /bin/recovery-ui

@@ -1,0 +1,15 @@
+[Unit]
+Description=Generate this device's SSH host keys (first boot)
+# The rootfs build deletes the host keys the openssh-server package generated,
+# so every device flashed from one image does not share them. This regenerates
+# a fresh set before sshd starts; the glob condition makes it a true one-shot.
+Before=ssh.service
+ConditionPathExistsGlob=!/etc/ssh/ssh_host_*_key
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target

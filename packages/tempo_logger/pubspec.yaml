@@ -1,0 +1,11 @@
+name: tempo_logger
+description: Structured logging with tagged loggers, record filters, and pluggable writers.
+version: 0.1.0
+publish_to: none
+resolution: workspace
+environment:
+  sdk: ^3.12.2
+dependencies:
+  file: ^7.0.1
+dev_dependencies:
+  test: ^1.26.0

@@ -1,0 +1,24 @@
+# Build output
+build/
+
+# Rust build artifacts
+target/
+**/target/
+
+# Dart/Flutter tooling output (Dart is formatted by `dart format`, not Prettier)
+.dart_tool/
+*.freezed.dart
+*.g.dart
+
+# Git submodules (formatted in their own repos)
+platform/kernel/linux/
+
+# Lockfiles
+pubspec.lock
+Cargo.lock
+
+# Vendored / reference material
+docs/assets/
+
+# Rust is formatted by rustfmt (see rustfmt.toml), not Prettier
+*.rs

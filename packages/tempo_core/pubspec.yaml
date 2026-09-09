@@ -1,0 +1,79 @@
+name: tempo_core
+description: >-
+  The Y2's home experience as a package: every screen the player shows,
+  laid out for the player's panel, so the device and the emulator run the
+  same UI rather than two that resemble each other.
+version: 0.1.0
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  tempo_assets:
+    path: ../../assets
+  player_api:
+    path: ../player_api
+  daemon_client:
+    path: ../daemon_client
+  flutter:
+    sdk: flutter
+  # A card is a filesystem, and which filesystem is the difference between
+  # the device's slot, a folder on a desktop, and one made up in memory -
+  # so the player is handed the abstraction rather than a path.
+  file: ^7.0.1
+  # Explicit IANA clock conversion, independent of the VM's cached local zone.
+  timezone: ^0.11.1
+  # Path arithmetic on the player's own namespace, which is posix whatever
+  # the host is.
+  path: ^1.9.0
+  # Decoding, cropping and re-encoding a wallpaper as it is taken in: more
+  # formats than dart:ui's codec, EXIF orientation, and no GPU context - so
+  # it works the same on the device, on a desk, and under a test.
+  image: ^4.5.0
+  # The library: Cadence's media foundation - the typed libraries over
+  # files, the scanner and the extractors, and the service that owns the
+  # database - consumed from Cadence's own repo so the two players share one
+  # implementation (and one protocol, for the day they talk to each other).
+  # Pure Dart over dart:ffi (drift on the system libsqlite3), so it runs
+  # whole under flutter-pi. Pinned by the lock to a commit of develop;
+  # `fvm dart pub upgrade cadence_media` moves it.
+  cadence_media:
+    git:
+      url: ssh://git@pi-cluster-00.neon-bramble.ts.net/artificer/cadence.git
+      path: packages/media
+      ref: develop
+  # The player: libmpv over dart:ffi, audio only - no media_kit_video, no
+  # platform plugin, so it too runs whole under flutter-pi with the
+  # system's libmpv (rootfs.packages.audio has libmpv2).
+  media_kit: ^1.2.6
+  # One libc call before libmpv is made: setlocale(LC_NUMERIC, "C").
+  ffi: ^2.1.0
+  # Published widgets-layer design system; no desktop plugin on the device.
+  tomeui: ^0.3.0
+  # The device's grammar: wheel jogs, ring buttons, power chords, WheelList.
+  tomeui_clickwheel: ^0.3.0
+  video_player: ^2.14.0
+
+dev_dependencies:
+  tempod:
+    path: ../../daemon
+  # Tests host the media service in memory: drift's own connection.
+  drift: ^2.34.0
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter
+  video_player_platform_interface: ^6.9.0
+
+flutter:
+  assets:
+    # The same picture the LOGO partition and the plymouth theme draw: the
+    # Debian swirl dead center on a 480x360 black field. Byte-identical to
+    # platform/splash/assets/boot-logo.png (plymouth/tempo/logo.png is the same
+    # swirl unflattened, drawn at the same place), so the splash -> app
+    # handoff doesn't move the logo by a pixel. Regenerate both from
+    # `toolbox dev os splash assets` and copy, never edit one alone.
+    - assets/swirl.png
+    # The default wallpaper, until the user puts one in their home.
+    - assets/wallpaper.jpg

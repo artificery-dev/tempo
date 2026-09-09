@@ -1,0 +1,18 @@
+name: flutter_pi_plymouth_handoff
+description: >-
+  Seamless plymouth -> flutter-pi boot-splash hand-off: the splash keeps
+  animating through flutter-pi's startup and only gives way once the app's
+  first frame is on screen. Needs the matching native flutter-pi plugin.
+version: 0.1.0
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^6.0.0

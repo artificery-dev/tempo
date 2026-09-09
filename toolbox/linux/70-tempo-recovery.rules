@@ -1,0 +1,2 @@
+# Tempo Recovery: grant the active desktop session access before uaccess runs.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0525", ATTR{idProduct}=="a4aa", ATTR{serial}=="tempo-recovery", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

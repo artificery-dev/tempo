@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Tempo
+Description=Debian swirl on black, with an orbiting throbber, for the 480x360 Innioasis Y2 panel
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/tempo
+ScriptFile=/usr/share/plymouth/themes/tempo/tempo.script

@@ -1,0 +1,16 @@
+{
+  "printWidth": 80,
+  "proseWrap": "always",
+  "tabWidth": 2,
+  "semi": true,
+  "singleQuote": false,
+  "overrides": [
+    {
+      "files": ["*.md", "*.markdown"],
+      "options": {
+        "printWidth": 80,
+        "proseWrap": "preserve"
+      }
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "toolbox: resolve Flutter packages",
+      "type": "process",
+      "command": "${workspaceFolder}/toolbox/app/.fvm/flutter_sdk/bin/flutter",
+      "args": ["pub", "get"],
+      "options": {
+        "cwd": "${workspaceFolder}/toolbox/app"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "toolbox: build Linux debug",
+      "dependsOn": "toolbox: resolve Flutter packages",
+      "type": "process",
+      "command": "${workspaceFolder}/toolbox/app/.fvm/flutter_sdk/bin/dart",
+      "args": [
+        "run",
+        "bin/toolbox.dart",
+        "dev",
+        "toolbox",
+        "build",
+        "linux",
+        "--debug",
+        "--gui-only"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/toolbox/cli"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "format": "dev.artificery.tempo.y2-firmware",
+  "format_version": 1,
+  "device": {
+    "id": "innioasis-y2",
+    "hardware_code": 25986,
+    "hardware_subcode": 35328,
+    "storage": {
+      "boot1": 4194304,
+      "boot2": 4194304,
+      "user": 7818182656
+    }
+  },
+  "firmware": {
+    "id": "example-backup",
+    "name": "Example Y2 backup",
+    "version": "2026-09-06"
+  },
+  "images": [
+    {
+      "file": "images/emmc.img",
+      "size": 7827095552,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "writes": [
+        {
+          "name": "preloader",
+          "region": "boot1",
+          "source_offset": 0,
+          "target_offset": 0,
+          "length": 4194304
+        },
+        {
+          "name": "boot2",
+          "region": "boot2",
+          "source_offset": 4194304,
+          "target_offset": 0,
+          "length": 4194304
+        },
+        {
+          "name": "user",
+          "region": "user",
+          "source_offset": 8912896,
+          "target_offset": 0,
+          "length": 7818182656
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,292 @@
+#!/bin/sh
+# Initramfs init - TEMPLATE.
+#
+# @HOSTNAME@ is substituted from config.yaml (device.hostname) by
+# toolbox dev os initramfs render, which writes the rendered copy to
+# build/initramfs/init. Edit this file, never the rendered one.
+#
+# Boot flow:
+#   1. If Debian is already on the eMMC rootfs partition (mmcblk0p1, carved from
+#      the kernel cmdline over the ANDROID region), switch_root into it.
+#   2. Otherwise, look for the Debian image (@HOSTNAME@.ext4[.gz]) on the microSD
+#      and install it onto mmcblk0p1 (SPFT can't write big partitions, but the
+#      eMMC is writable from Linux and the SD is readable) - then boot it.
+#   3. Otherwise drop to a diagnostic shell.
+
+/bin/busybox --install -s /bin 2>/dev/null
+
+mount -t proc     proc     /proc 2>/dev/null
+mount -t sysfs    sysfs    /sys  2>/dev/null
+mount -t devtmpfs devtmpfs /dev  2>/dev/null
+mount -t tmpfs    tmpfs    /run  2>/dev/null
+
+# Boot splash as early as possible: wait (bounded) for the built-in DRM driver
+# to finish binding - /init runs at ~0.7s but mediatek-drm binds at ~2s, and a
+# plymouthd started before /dev/dri/card0 exists never finds the display (no
+# udev here to tell it later). Once the node exists the connector is already
+# probed (mtk_drm_bind does that), so plymouth takes the display over from
+# LK's still-scanning boot logo right here - seconds before the rootfs.
+# /run is moved into the new root below, so the daemon (which survives
+# switch_root) keeps its socket/pid and systemd's plymouth units adopt it
+# instead of starting a second one. No-op when the payload isn't packed in.
+# Console output is invisible (serial pads unwired) - log via /dev/kmsg.
+if [ -x /usr/sbin/plymouthd ]; then
+	i=0
+	while [ ! -e /dev/dri/card0 ] && [ $i -lt 80 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	if [ -e /dev/dri/card0 ]; then
+		mkdir -p /dev/pts /run/plymouth /var/log /tmp
+		mount -t devpts devpts /dev/pts 2>/dev/null
+		# No udevd runs here, and plymouth (22.02) only accepts DRM
+		# devices whose udev db entry exists (initialized) and carries
+		# the seat tags. Fabricate the one entry for the display card;
+		# the real udevd rewrites it properly after switch_root.
+		maj=$((0x$(stat -c%t /dev/dri/card0)))
+		min=$((0x$(stat -c%T /dev/dri/card0)))
+		mkdir -p /run/udev/data
+		printf "I:1\nG:seat\nG:master-of-seat\nQ:seat\nQ:master-of-seat\n" \
+			> "/run/udev/data/c${maj}:${min}"
+		if /usr/sbin/plymouthd --mode=boot --pid-file=/run/plymouth/pid \
+			--attach-to-session 2>/run/ply.err ||
+		   /usr/sbin/plymouthd --mode=boot --pid-file=/run/plymouth/pid \
+			2>>/run/ply.err; then
+			if /usr/bin/plymouth show-splash 2>>/run/ply.err; then
+				echo "@HOSTNAME@: early splash up (waited ${i}00ms for drm)" > /dev/kmsg
+			else
+				echo "@HOSTNAME@: show-splash FAILED" > /dev/kmsg
+			fi
+		else
+			echo "@HOSTNAME@: plymouthd FAILED rc=$?" > /dev/kmsg
+		fi
+		while read -r line; do
+			echo "@HOSTNAME@ ply: $line" > /dev/kmsg
+		done < /run/ply.err 2>/dev/null
+	else
+		echo "@HOSTNAME@: no /dev/dri/card0 after 8s - skipping early splash" > /dev/kmsg
+	fi
+fi
+
+ROOTDEV=/dev/mmcblk0p1
+
+# The splash's update mode (platform/splash/plymouth/tempo): swap the throbber for a
+# progress bar while the rootfs is written, then bring the throbber back for
+# the boot that follows. All no-ops without the plymouth payload.
+splash_update_begin() {
+	[ -x /usr/bin/plymouth ] || return 0
+	plymouth update --status=tempo-update 2>/dev/null
+	plymouth display-message --text="$1" 2>/dev/null
+}
+splash_update_progress() {
+	[ -x /usr/bin/plymouth ] || return 0
+	plymouth system-update --progress="$1" 2>/dev/null
+}
+splash_update_end() {
+	[ -x /usr/bin/plymouth ] || return 0
+	plymouth hide-message --text="$1" 2>/dev/null
+	plymouth update --status=tempo-update-done 2>/dev/null
+}
+
+# Write the image to the rootfs partition, reporting progress to the splash.
+# dd runs in the background and its position on the output device is read
+# from /proc, so busybox's dd needs no status option. The total is the image
+# size from config, not the gzip trailer (4 GiB wraps to 0 there).
+install_image() {
+	total_mb=@ROOTFS_SIZE_MB@
+	case "$1" in
+		*.gz) gunzip -c "$1" | dd of="$ROOTDEV" bs=1M 2>/dev/null & ;;
+		*)    dd if="$1" of="$ROOTDEV" bs=1M 2>/dev/null & ;;
+	esac
+	ddpid=$!
+	last=-1
+	while kill -0 "$ddpid" 2>/dev/null; do
+		pos=""
+		for fd in /proc/$ddpid/fd/*; do
+			[ "$(readlink "$fd" 2>/dev/null)" = "$ROOTDEV" ] || continue
+			pos=$(awk '/^pos:/ { print $2 }' "/proc/$ddpid/fdinfo/${fd##*/}" 2>/dev/null)
+			break
+		done
+		if [ -n "$pos" ] && [ "$total_mb" -gt 0 ]; then
+			pct=$(( pos / 1048576 * 100 / total_mb ))
+			[ "$pct" -gt 100 ] && pct=100
+			if [ "$pct" != "$last" ]; then
+				splash_update_progress "$pct"
+				last=$pct
+			fi
+		fi
+		sleep 1
+	done
+	wait "$ddpid"
+	splash_update_progress 100
+	sync
+}
+
+# One-time tweaks to the on-eMMC Debian we can only do from here (no input on
+# the device yet): enable a login on the USB serial gadget (/dev/ttyGS0). The
+# symlink persists on the rootfs, so this is effectively a one-shot.
+enable_serial_getty() {
+	tmpl=/newroot/lib/systemd/system/serial-getty@.service
+	want=/newroot/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service
+	if [ -e "$tmpl" ] && [ ! -e "$want" ]; then
+		mkdir -p /newroot/etc/systemd/system/getty.target.wants
+		ln -s /lib/systemd/system/serial-getty@.service "$want"
+		echo "@HOSTNAME@: enabled serial-getty on ttyGS0"
+	fi
+
+	# Keep the ttyGS0 getty from permanently dying under USB reconnects: the
+	# CDC-ACM host dropping DTR HUPs agetty, and a burst of reconnects trips
+	# systemd's default 5-in-10s start limit, leaving it "failed" until reboot.
+	# Only lift the start limit (Restart=always then respawns forever). Do NOT
+	# override ExecStart - a prior --local-line agetty override wedged the login
+	# entirely; keep stock agetty. ssh over the gadget is the primary channel now.
+	dropdir=/newroot/etc/systemd/system/serial-getty@ttyGS0.service.d
+	if [ -d /newroot/etc/systemd/system ] && [ ! -e "$dropdir/override.conf" ]; then
+		mkdir -p "$dropdir"
+		cat > "$dropdir/override.conf" <<'EOF'
+[Unit]
+StartLimitIntervalSec=0
+EOF
+		echo "@HOSTNAME@: serial-getty@ttyGS0 start-limit lifted"
+	fi
+}
+
+# The installed rootfs image is only ~512MB but mmcblk0p1 spans ~7.2GB (see the
+# blkdevparts cmdline). busybox has no resize2fs and stuffing e2fsprogs into this
+# kernel-embedded initramfs risks LK truncating the image, so grow the fs from
+# the rootfs's OWN resize2fs on first boot: drop a one-shot systemd unit (like
+# the serial-getty tweak above). resize2fs is self-guarding - it grows online to
+# fill the partition and no-ops once full - and the /var/lib marker makes it a
+# true one-shot. If the rootfs still lacks resize2fs (older minbase images) the
+# unit exits 0 without marking done, so a later boot (once e2fsprogs is present)
+# completes it.
+install_firstboot_resize() {
+	unit=/newroot/etc/systemd/system/@HOSTNAME@-resize-rootfs.service
+	want=/newroot/etc/systemd/system/sysinit.target.wants/@HOSTNAME@-resize-rootfs.service
+	[ -d /newroot/etc/systemd/system ] || return 0
+	if [ ! -e "$unit" ]; then
+		cat > "$unit" <<'EOF'
+[Unit]
+Description=Grow the Y2 rootfs to fill its eMMC partition (one-shot)
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=sysinit.target
+ConditionPathExists=!/var/lib/@HOSTNAME@-resized
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'command -v resize2fs >/dev/null 2>&1 || exit 0; resize2fs /dev/mmcblk0p1 && touch /var/lib/@HOSTNAME@-resized'
+
+[Install]
+WantedBy=sysinit.target
+EOF
+		mkdir -p /newroot/etc/systemd/system/sysinit.target.wants
+		ln -s /etc/systemd/system/@HOSTNAME@-resize-rootfs.service "$want"
+		echo "@HOSTNAME@: installed one-shot rootfs resize service"
+	fi
+}
+
+boot_debian() {
+	mkdir -p /newroot
+	# Validate via /etc/os-release (a real file). Do NOT test -x on /sbin/init:
+	# it's an ABSOLUTE symlink (-> /lib/systemd/systemd) that resolves against
+	# the initramfs root here and would falsely fail; switch_root resolves it
+	# correctly after chroot.
+	if mount -t ext4 "$ROOTDEV" /newroot 2>/dev/null && [ -f /newroot/etc/os-release ]; then
+		enable_serial_getty
+		install_firstboot_resize
+		echo "@HOSTNAME@: booting Debian from $ROOTDEV ..."
+		mount --move /dev  /newroot/dev  2>/dev/null
+		mount --move /proc /newroot/proc 2>/dev/null
+		mount --move /sys  /newroot/sys  2>/dev/null
+		mount --move /run  /newroot/run  2>/dev/null
+		exec switch_root /newroot /sbin/init
+	fi
+	umount /newroot 2>/dev/null
+	return 1
+}
+
+# A FORCE_REINSTALL file on the microSD forces a clean re-provision even when a
+# valid Debian already sits on the eMMC. Detection only - the flag is cleared
+# after a successful boot by a rootfs service (kept out of the initramfs on
+# purpose), so a crash mid-reinstall just retries instead of losing the trigger.
+FORCE=""
+mkdir -p /sd
+j=0
+while [ $j -lt 6 ]; do
+	for p in /dev/mmcblk1p1 /dev/mmcblk1p2 /dev/mmcblk1; do
+		[ -b "$p" ] || continue
+		for fs in vfat exfat ext4 ext2; do
+			mount -t "$fs" "$p" /sd 2>/dev/null || continue
+			[ -f /sd/FORCE_REINSTALL ] && FORCE=1
+			umount /sd 2>/dev/null
+			break
+		done
+	done
+	{ [ -n "$FORCE" ] || [ -b /dev/mmcblk1 ]; } && break
+	j=$((j + 1)); sleep 1
+done
+[ -n "$FORCE" ] && echo "@HOSTNAME@: FORCE_REINSTALL set on SD - re-provisioning"
+
+# 1. already installed? The eMMC card scan is async, so mmcblk0p1 may not exist
+# the instant init runs - retry for a while before giving up. Without this a
+# slow probe makes boot_debian fail and (if the SD is inserted) fall through to
+# the DESTRUCTIVE reinstall below, wiping a perfectly good Debian on every boot.
+# boot_debian execs switch_root on success and never returns. Skipped entirely
+# when a reinstall is forced.
+i=0
+while [ -z "$FORCE" ] && [ $i -lt 20 ]; do
+	[ -b "$ROOTDEV" ] && boot_debian
+	i=$((i + 1))
+	sleep 1
+done
+
+# 2. no valid Debian after 20s - find the image on the SD and install it
+sleep 2				# let the SD probe settle
+IMG=""
+mkdir -p /sd
+for p in /dev/mmcblk1p1 /dev/mmcblk1p2 /dev/mmcblk1; do
+	[ -b "$p" ] || continue
+	for fs in vfat exfat ext4 ext2; do
+		if mount -t "$fs" "$p" /sd 2>/dev/null; then
+			if   [ -f /sd/@HOSTNAME@.ext4.gz ]; then IMG=/sd/@HOSTNAME@.ext4.gz; break 2
+			elif [ -f /sd/@HOSTNAME@.ext4 ];    then IMG=/sd/@HOSTNAME@.ext4;    break 2
+			fi
+			umount /sd 2>/dev/null
+		fi
+	done
+done
+
+if [ -n "$IMG" ] && [ -b "$ROOTDEV" ]; then
+	echo "=================================================="
+	echo " @HOSTNAME@: installing Debian"
+	echo "   from $IMG"
+	echo "   to   $ROOTDEV  (writing ~512MB, ~1 min, please wait)"
+	echo "=================================================="
+	splash_update_begin "Installing @HOSTNAME@"
+	install_image "$IMG"
+	umount /sd 2>/dev/null
+	echo "@HOSTNAME@: install complete."
+	splash_update_end "Installing @HOSTNAME@"
+	boot_debian
+fi
+
+# 2b. a forced reinstall that found no image must not strand the device at the
+# shell - boot the existing rootfs if there is a valid one.
+[ -n "$FORCE" ] && [ -b "$ROOTDEV" ] && boot_debian
+
+# 3. fallback shell
+hostname @HOSTNAME@
+printf '\033]P7ffffff'
+echo
+echo "=================================================="
+echo "   @HOSTNAME@ - initramfs (no rootfs installed yet)"
+echo "=================================================="
+echo "rootdev   : $ROOTDEV $([ -b $ROOTDEV ] && echo present || echo ABSENT)"
+echo "sd        : $([ -b /dev/mmcblk1 ] && echo present || echo ABSENT)"
+echo "image     : $([ -n "$IMG" ] && echo "$IMG" || echo 'not found on SD (copy @HOSTNAME@.ext4.gz to the card)')"
+grep mmc /proc/partitions 2>/dev/null
+uname -a
+echo "--------------------------------------------------"
+exec /bin/sh

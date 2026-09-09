@@ -1,0 +1,24 @@
+# tempod's control socket, held by systemd so the frontend can connect
+# before (or while) tempod itself starts.
+#
+# Installed as-is by the rootfs builder. The socket's group is not set here:
+# it is the default user from config.yaml (user.name), which the builder
+# writes into a drop-in, tempod.socket.d/10-group.conf:
+#
+#   [Socket]
+#   SocketGroup=<user.name>
+#
+# The path must match daemon.socket in config.yaml, which tempod has baked
+# in as its own default (daemon/tool/build.dart). See docs/app/daemon.md.
+[Unit]
+Description=tempod control socket
+
+[Socket]
+Service=tempod-native.service
+ListenStream=/run/tempod/tempod.sock
+SocketMode=0660
+SocketUser=root
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

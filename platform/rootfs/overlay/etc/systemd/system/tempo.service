@@ -1,0 +1,34 @@
+[Unit]
+Description=Tempo - the player frontend
+# The splash is ours to hand off from: come up once it is showing and take the
+# panel over. The hand-off owns itself - flutter-pi starts while plymouth still
+# holds the DRM master, and the in-engine handoff plugin, signalled from Dart at
+# the first frame, fades the splash and takes the master. plymouth-quit.service
+# is masked by the builder so nothing blanks the splash before that happens.
+After=plymouth-start.service systemd-user-sessions.service
+Wants=plymouth-start.service
+# Wait for authenticated services and native control to be ready.
+After=tempod.service
+Requires=tempod.service
+# Tempo owns the panel; no getty on it.
+Conflicts=getty@tty1.service
+
+# The runtime is staged separately from the image build, so skip cleanly rather
+# than restart-looping when it is not there yet.
+ConditionPathExists=/usr/local/bin/flutter-pi
+ConditionPathExists=/opt/tempo/flutter_assets
+
+[Service]
+Type=simple
+# Runs unprivileged. DRM/GBM comes from the video and render groups and the
+# volume-key probe from input, all granted to this account by the rootfs build.
+# Anything genuinely privileged goes through tempod, not through this unit -
+# User=/Group= are set by a drop-in the builder writes from config.yaml.
+Environment=TEMPO_VIDEO_SIZE=480x360
+ExecStart=/usr/local/lib/tempo-system/tempo-system launch
+Restart=always
+RestartSec=1
+OOMScoreAdjust=-600
+
+[Install]
+WantedBy=multi-user.target

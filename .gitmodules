@@ -1,0 +1,10 @@
+[submodule "platform/kernel/linux"]
+	branch = tempo/innioasis-y2
+	path = platform/kernel/linux
+	url = https://github.com/artificery-dev/linux.git
+	shallow = true
+[submodule "app/flutter-pi/flutter-pi"]
+	path = app/flutter-pi/flutter-pi
+	url = https://github.com/ardera/flutter-pi.git
+	shallow = true
+	ignore = dirty

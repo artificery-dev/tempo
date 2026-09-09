@@ -1,0 +1,9 @@
+name: tempo_toolbox_cli
+publish_to: none
+environment:
+  sdk: ^3.12.2
+dependencies:
+  tempo_build:
+    path: ../../packages/tempo_build
+  toolbox_core:
+    path: ../../packages/toolbox_core

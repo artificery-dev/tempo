@@ -1,0 +1,11 @@
+name: toolbox_core
+publish_to: none
+environment:
+  sdk: ^3.12.2
+dependencies:
+  crypto: ^3.0.6
+  path: ^1.9.1
+  tempo_usb:
+    path: ../tempo_usb
+dev_dependencies:
+  test: ^1.26.0

@@ -1,0 +1,48 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 734aba5..bd973a5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -147,6 +147,7 @@ add_library(
+   src/window.c
+   src/dummy_render_surface.c
+   src/plugins/services.c
++  src/plugins/plymouth_handoff.c
+ )
+ 
+ target_link_libraries(flutterpi_module PUBLIC
+diff --git a/src/flutter-pi.c b/src/flutter-pi.c
+index 877ef49..d185f3d 100644
+--- a/src/flutter-pi.c
++++ b/src/flutter-pi.c
+@@ -1031,6 +1031,14 @@ struct gbm_device *flutterpi_get_gbm_device(struct flutterpi *flutterpi) {
+     return drmdev_get_gbm_device(flutterpi->drmdev);
+ }
+ 
++struct drmdev *flutterpi_get_drmdev(struct flutterpi *flutterpi) {
++    return flutterpi->drmdev;
++}
++
++void flutterpi_request_frame(struct flutterpi *flutterpi) {
++    flutterpi->flutter.procs.ScheduleFrame(flutterpi->flutter.engine);
++}
++
+ bool flutterpi_has_gl_renderer(struct flutterpi *flutterpi) {
+     ASSERT_NOT_NULL(flutterpi);
+     return flutterpi->gl_renderer != NULL;
+diff --git a/src/flutter-pi.h b/src/flutter-pi.h
+index b2b3dc1..ad4f045 100644
+--- a/src/flutter-pi.h
++++ b/src/flutter-pi.h
+@@ -187,6 +187,12 @@ void flutterpi_schedule_exit(struct flutterpi *flutterpi);
+ 
+ struct gbm_device *flutterpi_get_gbm_device(struct flutterpi *flutterpi);
+ 
++// Added for the plymouth-handoff plugin: reach the drmdev to re-acquire DRM
++// master after the splash drops it, and force a frame so the paused first
++// commit lands.
++struct drmdev *flutterpi_get_drmdev(struct flutterpi *flutterpi);
++void flutterpi_request_frame(struct flutterpi *flutterpi);
++
+ bool flutterpi_has_gl_renderer(struct flutterpi *flutterpi);
+ 
+ struct gl_renderer *flutterpi_get_gl_renderer(struct flutterpi *flutterpi);

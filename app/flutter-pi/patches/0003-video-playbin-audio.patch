@@ -1,0 +1,166 @@
+diff --git a/src/plugins/gstreamer_video_player/player.c b/src/plugins/gstreamer_video_player/player.c
+index a6555ee..71c04b8 100644
+--- a/src/plugins/gstreamer_video_player/player.c
++++ b/src/plugins/gstreamer_video_player/player.c
+@@ -70,6 +70,8 @@ enum playback_direction { kForward, kBackward };
+                                       "?")
+ 
+ struct gstplayer {
++    GstClockTime last_stats_time;
++    atomic_int last_frame_ms;
+     pthread_mutex_t lock;
+ 
+     struct flutterpi *flutterpi;
+@@ -689,6 +691,11 @@ static GstPadProbeReturn on_probe_pad(GstPad *pad, GstPadProbeInfo *info, void *
+         return GST_PAD_PROBE_OK;
+     }
+ 
++    if (getenv("TEMPO_VIDEO_STATS") != NULL) {
++        gchar *description = gst_caps_to_string(caps);
++        LOG_ERROR("video-caps %s\n", description);
++        g_free(description);
++    }
+     ok = gst_video_info_from_caps(&player->gst_info, caps);
+     if (!ok) {
+         LOG_ERROR("gstreamer: caps event with invalid video caps\n");
+@@ -805,6 +812,10 @@ static GstFlowReturn on_appsink_new_sample(GstAppSink *appsink, void *userdata)
+ 
+     frame = frame_new(player->frame_interface, sample, player->has_gst_info ? &player->gst_info : NULL);
+ 
++    GstClockTime pts = GST_BUFFER_PTS(gst_sample_get_buffer(sample));
++    if (frame != NULL && GST_CLOCK_TIME_IS_VALID(pts)) {
++        atomic_store(&player->last_frame_ms, pts / GST_MSECOND);
++    }
+     gst_sample_unref(sample);
+ 
+     if (frame != NULL) {
+@@ -852,24 +863,51 @@ static int init(struct gstplayer *player, bool force_sw_decoders) {
+     GError *error = NULL;
+     int ok;
+ 
+-    static const char *default_pipeline_descr = "uridecodebin name=\"src\" ! video/x-raw ! appsink sync=true name=\"sink\"";
+-
+-    const char *pipeline_descr;
+     if (player->pipeline_description != NULL) {
+-        pipeline_descr = player->pipeline_description;
++        pipeline = gst_parse_launch(player->pipeline_description, &error);
++        if (pipeline == NULL) {
++            LOG_ERROR("Could not create GStreamer pipeline: %s\n", error != NULL ? error->message : "unknown error");
++            ok = error != NULL ? error->code : EINVAL;
++            g_clear_error(&error);
++            return ok;
++        }
++        sink = gst_bin_get_by_name(GST_BIN(pipeline), "sink");
+     } else {
+-        pipeline_descr = default_pipeline_descr;
+-    }
+-
+-    pipeline = gst_parse_launch(pipeline_descr, &error);
+-    if (pipeline == NULL) {
+-        LOG_ERROR("Could create GStreamer pipeline from description: %s (pipeline: `%s`)\n", error->message, pipeline_descr);
+-        return error->code;
++        // playbin owns demuxing, independent audio/video queues and one clock.
++        // The former video-only uridecodebin pipeline silently discarded audio.
++        pipeline = gst_element_factory_make("playbin", "src");
++        if (pipeline == NULL) {
++            LOG_ERROR("Could not create GStreamer playbin.\n");
++            return ENOENT;
++        }
++        sink = gst_element_factory_make("appsink", "sink");
++        if (sink != NULL) {
++            gst_object_ref_sink(sink);
++            g_object_set(pipeline, "video-sink", sink, NULL);
++            // Embedded panels need no full-resolution texture uploads. Opt in
++            // per device; videoscale preserves aspect ratio with letterboxing.
++            const char *size = getenv("TEMPO_VIDEO_SIZE");
++            int width, height;
++            char trailing;
++            if (size != NULL && sscanf(size, "%dx%d%c", &width, &height, &trailing) == 2
++                && width > 0 && height > 0 && width <= 4096 && height <= 4096) {
++                gchar *description = g_strdup_printf(
++                    "videoscale add-borders=true ! capsfilter caps=\"video/x-raw,width=%d,height=%d,pixel-aspect-ratio=1/1\"", width, height);
++                GstElement *filter = gst_parse_bin_from_description(description, TRUE, &error);
++                g_free(description);
++                if (filter != NULL) {
++                    gst_object_ref_sink(filter);
++                    g_object_set(pipeline, "video-filter", filter, NULL);
++                    gst_object_unref(filter);
++                } else {
++                    LOG_ERROR("Could not create panel video scaler: %s\n", error != NULL ? error->message : "unknown error");
++                }
++                g_clear_error(&error);
++            }
++        }
+     }
+-
+-    sink = gst_bin_get_by_name(GST_BIN(pipeline), "sink");
+     if (sink == NULL) {
+-        LOG_ERROR("Couldn't find appsink in pipeline bin.\n");
++        LOG_ERROR("Could not create or find the video appsink.\n");
+         ok = EINVAL;
+         goto fail_unref_pipeline;
+     }
+@@ -883,7 +921,9 @@ static int init(struct gstplayer *player, bool force_sw_decoders) {
+ 
+     gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_QUERY_DOWNSTREAM, on_query_appsink, player, NULL);
+ 
+-    src = gst_bin_get_by_name(GST_BIN(pipeline), "src");
++    src = player->pipeline_description != NULL
++        ? gst_bin_get_by_name(GST_BIN(pipeline), "src")
++        : gst_object_ref(pipeline);
+ 
+     if (player->video_uri != NULL) {
+         if (src != NULL) {
+@@ -901,7 +941,7 @@ static int init(struct gstplayer *player, bool force_sw_decoders) {
+         }
+     }
+ 
+-    if (player->headers != NULL) {
++    if (player->headers != NULL && gst_structure_n_fields(player->headers) > 0) {
+         if (src != NULL) {
+             g_signal_connect(G_OBJECT(src), "source-setup", G_CALLBACK(on_source_setup), player->headers);
+         } else {
+@@ -1069,6 +1109,8 @@ static struct gstplayer *gstplayer_new(struct flutterpi *flutterpi, const char *
+     if (ok != 0)
+         goto fail_deinit_buffering_state_notifier;
+ 
++    player->last_stats_time = 0;
++    atomic_init(&player->last_frame_ms, -1);
+     player->flutterpi = flutterpi;
+     player->userdata = userdata;
+     player->video_uri = uri_owned;
+@@ -1228,14 +1270,31 @@ int gstplayer_set_looping(struct gstplayer *player, bool looping) {
+ }
+ 
+ int gstplayer_set_volume(struct gstplayer *player, double volume) {
+-    (void) player;
+-    (void) volume;
+     LOG_DEBUG("gstplayer_set_volume(%f)\n", volume);
+-    /// TODO: Implement
++    if (volume < 0.0 || volume > 1.0) {
++        return EINVAL;
++    }
++    if (player->pipeline != NULL && player->pipeline_description == NULL) {
++        g_object_set(player->pipeline, "volume", volume, NULL);
++    }
+     return 0;
+ }
+ 
+ int64_t gstplayer_get_position(struct gstplayer *player) {
++    // Opt-in, bounded diagnostics for device playback acceptance tests.
++    if (getenv("TEMPO_VIDEO_STATS") != NULL && player->sink != NULL) {
++        GstClockTime now = gst_util_get_timestamp();
++        if (now - player->last_stats_time >= 5 * GST_SECOND) {
++            GstStructure *stats = gst_base_sink_get_stats(GST_BASE_SINK(player->sink));
++            gchar *text = gst_structure_to_string(stats);
++            gint64 position = GST_CLOCK_TIME_NONE;
++            gst_element_query_position(player->pipeline, GST_FORMAT_TIME, &position);
++            LOG_ERROR("video-stats monotonic_ns=%" PRIu64 " position_ns=%" PRId64 " video_pts_ms=%d %s\n", now, position, atomic_load(&player->last_frame_ms), text);
++            g_free(text);
++            gst_structure_free(stats);
++            player->last_stats_time = now;
++        }
++    }
+     GstState current, pending;
+     gboolean ok;
+     int64_t position;

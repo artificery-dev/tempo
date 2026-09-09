@@ -1,0 +1,13 @@
+openlogo-nd.svg is the Debian Open Use Logo without the "Debian" wordmark.
+
+  Copyright (c) 1999 Software in the Public Interest, Inc.
+  Licensed under GPL-3+ or CC-BY-SA-3.0 (see debian/copyright in the Debian
+  desktop-base source package, stanza "debian-logos/*").
+
+Fetched verbatim from https://www.debian.org/logos/openlogo-nd.svg and not
+modified. Everything under src/boot-logo/ that shows the swirl - boot-logo.png
+and plymouth/tempo/logo.png - is rendered from this file by mk-assets.
+
+Debian is a registered trademark of Software in the Public Interest, Inc. This
+is a Debian system, so the mark is used descriptively; the Y2 port is not an
+official Debian product.

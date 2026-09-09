@@ -1,0 +1,5 @@
+# Keep every cargo invocation's output under build/ (rm -rf build is the one
+# clean). The just recipes set CARGO_TARGET_DIR to the same place; this covers
+# a bare `cargo build` or an editor's rust-analyzer.
+[build]
+target-dir = "build/rust"

@@ -1,0 +1,58 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // The device on a desk: the player's UI (package:tempo_core,
+      // the same one app runs) inside a drawn body, with the
+      // click wheel and the side buttons pressing the real grammar.
+      // This is the one to launch for UI work off the device.
+      "name": "y2 emulator",
+      "customTool": "${workspaceFolder}/toolbox/app/.fvm/flutter_sdk/bin/flutter",
+      "type": "dart",
+      "request": "launch",
+      "flutterMode": "debug",
+      "cwd": "${workspaceFolder}/toolbox/app",
+      "preLaunchTask": "toolbox: build Linux debug",
+      "toolArgs": [
+        "--no-pub",
+        "--use-application-binary=${workspaceFolder}/build/toolbox/flutter/linux/x64/debug/bundle/tempo_toolbox",
+        "--dart-entrypoint-args=--emulator"
+      ],
+      "program": "lib/main.dart",
+      "deviceId": "linux"
+    },
+    {
+      // Attach the debugger to tempo running on the Y2 over the
+      // USB-gadget link: breakpoints, stepping, inspector, and hot
+      // reload/restart from the editor. The device-side flutter-pi
+      // already serves the VM service there (`toolbox dev app deploy`
+      // without --release starts it with --vm-service-port=41200
+      // --vm-service-host=0.0.0.0 --disable-service-auth-codes, as
+      // does the launcher when both volume keys are held at boot).
+      // The port is config.yaml's flutter.vm_service_port and the
+      // address networking.usb_gadget.address; if the link is down
+      // first run `toolbox dev device link up`.
+      "name": "tempo (attach to Y2)",
+      "type": "dart",
+      "request": "attach",
+      "cwd": "${workspaceFolder}/app",
+      "vmServiceUri": "http://10.42.0.1:41200/"
+    },
+    {
+      "name": "toolbox",
+      "customTool": "${workspaceFolder}/toolbox/app/.fvm/flutter_sdk/bin/flutter",
+      "type": "dart",
+      "request": "launch",
+      "flutterMode": "debug",
+      "cwd": "${workspaceFolder}/toolbox/app",
+      "preLaunchTask": "toolbox: build Linux debug",
+      "toolArgs": [
+        "--no-pub",
+        "--use-application-binary=${workspaceFolder}/build/toolbox/flutter/linux/x64/debug/bundle/tempo_toolbox"
+      ],
+      "args": [],
+      "program": "lib/main.dart",
+      "deviceId": "linux"
+    }
+  ]
+}

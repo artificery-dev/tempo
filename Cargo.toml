@@ -1,0 +1,50 @@
+# The Cargo workspace: tempod (daemon/native/) plus the device tools and shared
+# libraries under crates/. Build output goes to build/rust (CARGO_TARGET_DIR,
+# set by the just recipes and daemon/scripts/build), so `rm -rf build` is the
+# one clean.
+#
+#   just daemon build    cross-build everything for the device (release)
+#   just daemon test     host unit tests for tempod
+#   just crates build    the crates only, same cross build
+#   just crates test     host tests for the crates
+[workspace]
+resolver = "3"
+members = ["daemon/native", "packages/tempo_kms"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+# The toolchain container carries exactly this rustc; with resolver 3 the
+# lockfile only ever picks dependency versions that build there.
+rust-version = "1.90"
+
+[workspace.dependencies]
+tempo-kms = { path = "packages/tempo_kms" }
+
+# tempod
+libc = "0.2"
+# UI sounds: libasound at link time (the toolchain carries the armhf one),
+# reaching PipeWire through pipewire-alsa's "default" on the device.
+alsa = "0.9"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# device tools. drm is pure-Rust ioctls (no libdrm at link time); EGL, GLES
+# and GBM are dlopen'd at runtime, so the tools cross-compile with nothing but
+# the armv7 target and a C linker.
+drm = "0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+glow = "0.13"
+
+# Size first: these run on a 992 MB device from a small root filesystem, and
+# none of them is CPU-bound. Inherited from the bring-up stats daemon.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

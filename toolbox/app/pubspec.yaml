@@ -1,0 +1,47 @@
+name: tempo_toolbox
+description: "The Tempo Toolbox for the Innioasis Y2 with a shared Rust USB engine."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.1
+
+dependencies:
+  tempo_logger:
+    path: ../../packages/tempo_logger
+  tempo_assets:
+    path: ../../assets
+  tempo_data:
+    path: ../../packages/tempo_data
+  tempo_core:
+    path: ../../packages/tempo_core
+  tomeui_desktop: ^0.3.0
+  tomeui_clickwheel: ^0.3.0
+  window_manager: ^0.5.2
+  file: ^7.0.1
+  path_provider: ^2.1.5
+  sqlite3_flutter_libs: ^0.5.0
+  video_player_media_kit: ^2.0.0
+  media_kit_libs_video: ^1.0.7
+  toolbox_core:
+    path: ../../packages/toolbox_core
+  tempo_usb:
+    path: ../../packages/tempo_usb
+  url_launcher: ^6.3.2
+  file_selector: ^1.1.0
+  flutter:
+    sdk: flutter
+  tomeui: ^0.3.0
+  flutter_riverpod: ^3.4.2
+  go_router: ^18.0.1
+  desktop_drop: ^0.8.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  config:
+    enable-windowing: true
+  uses-material-design: false

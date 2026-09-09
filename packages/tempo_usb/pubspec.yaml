@@ -1,0 +1,6 @@
+name: tempo_usb
+publish_to: none
+environment:
+  sdk: ^3.12.2
+dev_dependencies:
+  test: ^1.26.0

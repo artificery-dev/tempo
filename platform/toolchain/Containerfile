@@ -1,0 +1,190 @@
+# Tempo build toolchain.
+#
+# Everything needed to build the project lives in here, so a checkout builds on
+# any host with podman and nothing else installed. The same image is meant to
+# serve as the CI build runner, with zsh available for an optional interactive shell.
+#
+#   Build:  dart run toolbox/cli/bin/toolbox.dart dev toolchain build
+#   Use:    dart run toolbox/cli/bin/toolbox.dart dev toolchain run <command>
+#
+# The build context is the workspace root (not this directory) so that
+# the component Containerfile is used; .containerignore limits the context to
+# that file and this directory.
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- kernel cross build -----------------------------------------------------
+# python3 stays because parts of the kernel build and our boot-image packaging
+# are Python; it is not here for U-Boot, which this project does not use.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-arm-linux-gnueabihf \
+        libc6-dev-armhf-cross \
+        build-essential \
+        bc bison flex \
+        libssl-dev libgnutls28-dev \
+        libncurses-dev \
+        device-tree-compiler \
+        kmod cpio rsync \
+        python3 python3-setuptools \
+        gzip xz-utils zstd \
+        git ca-certificates curl make file \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- flutter-pi cross build -------------------------------------------------
+# The device runs Debian bookworm armhf, so flutter-pi is linked against
+# bookworm's own armhf libraries, installed here through multiarch, rather
+# than against a hand-rolled sysroot: the binary then has exactly the sonames
+# and symbol versions the rootfs ships. The cross gcc above already searches
+# /usr/lib/arm-linux-gnueabihf and /usr/include/arm-linux-gnueabihf, and
+# app/flutter-pi/toolchain-armhf.cmake points pkg-config at the same tree.
+#
+# GStreamer provides flutter-pi video playback. Session switching and Vulkan
+# remain disabled (see app/flutter-pi/tool/build.dart). libasound2 is
+# for tempod's UI sounds: the alsa crate, playing through pipewire-alsa.
+RUN dpkg --add-architecture armhf \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        cmake pkg-config \
+        libdrm-dev:armhf \
+        libgbm-dev:armhf \
+        libegl-dev:armhf \
+        libgles-dev:armhf \
+        libinput-dev:armhf \
+        libudev-dev:armhf \
+        libxkbcommon-dev:armhf \
+        libsystemd-dev:armhf \
+        libasound2-dev:armhf \
+        libgstreamer1.0-dev:armhf \
+        libgstreamer-plugins-base1.0-dev:armhf \
+    && rm -rf /var/lib/apt/lists/*
+
+# SVG rasterization is a native tool; PNG composition/config parsing now run
+# in shared Dart tooling. Shipped Python bootstrap validation uses only stdlib.
+RUN apt-get update && apt-get install -y --no-install-recommends librsvg2-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- root filesystem images -------------------------------------------------
+# debootstrap's second stage runs armhf binaries under qemu user emulation.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        debootstrap qemu-user-static \
+        e2fsprogs dosfstools exfatprogs parted fdisk \
+        fakeroot uuid-runtime \
+    && rm -rf /var/lib/apt/lists/*
+
+# The interactive shell is optional; builds are dispatched by Dart.
+RUN apt-get update && apt-get install -y --no-install-recommends zsh nodejs unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- rust -------------------------------------------------------------------
+# Baked into the image rather than bind-mounted from the host, so the container
+# is self-sufficient as a build runner. CARGO_HOME is overridden at runtime by
+# the shared tempo_build Toolchain API to a path under build/, which keeps the registry cache with
+# the rest of the build output.
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:$PATH
+ARG RUST_VERSION=1.90.0
+RUN curl -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain ${RUST_VERSION} \
+        --target armv7-unknown-linux-gnueabihf,wasm32-unknown-unknown \
+        --component rustfmt,clippy \
+    && chmod -R a+rX,a+w /opt/cargo /opt/rustup \
+    && rustc --version
+
+# Bindings match packages/tempo_usb/rust/Cargo.lock. No host cargo install.
+RUN cargo install wasm-bindgen-cli --version 0.2.122 --locked --root /usr/local
+
+# Pure-Dart browser transport tests run beside Node in the container. This SDK
+# meets tempo_usb's constraint and does not replace either Flutter engine pin.
+ARG TOOLBOX_TEST_DART_VERSION=3.12.2
+RUN curl -fsSL "https://storage.googleapis.com/dart-archive/channels/stable/release/${TOOLBOX_TEST_DART_VERSION}/sdk/dartsdk-linux-x64-release.zip" -o /tmp/dart.zip \
+    && unzip -q /tmp/dart.zip -d /opt/toolbox-test \
+    && rm /tmp/dart.zip
+
+# Cross-linking for the device target.
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+
+# --- interactive shell ------------------------------------------------------
+# `toolbox dev toolchain shell` should be a pleasant place to work, not a bare prompt.
+# Oh My Zsh is installed system-wide and configured through /etc/zsh/zshrc,
+# because the container runs with HOME=/tmp and an arbitrary uid, so a per-user
+# ~/.zshrc would not be found. Only interactive shells read this file, so
+# non-interactive `toolbox dev toolchain run <cmd>` calls pay none of the startup cost.
+ENV ZSH=/opt/oh-my-zsh
+RUN git clone -q --depth 1 https://github.com/ohmyzsh/ohmyzsh.git $ZSH \
+    && git clone -q --depth 1 https://github.com/zsh-users/zsh-autosuggestions \
+         $ZSH/custom/plugins/zsh-autosuggestions \
+    && git clone -q --depth 1 https://github.com/zsh-users/zsh-syntax-highlighting \
+         $ZSH/custom/plugins/zsh-syntax-highlighting \
+    && rm -rf $ZSH/.git $ZSH/custom/plugins/*/.git \
+    && mkdir -p /usr/local/share/zsh/site-functions \
+    && chmod -R a+rX $ZSH
+
+RUN mkdir -p /etc/zsh && cat > /etc/zsh/zshrc <<'ZSHRC'
+# Tempo toolchain interactive shell (Oh My Zsh, system-wide).
+export ZSH=/opt/oh-my-zsh
+ZSH_THEME="ys"
+
+# The image is immutable and rebuilt by `toolbox dev toolchain rebuild`; self-updating
+# from inside a container would only ever produce a throwaway diff.
+zstyle ':omz:update' mode disabled
+DISABLE_AUTO_UPDATE=true
+DISABLE_UPDATE_PROMPT=true
+
+# HOME is /tmp in the container, so the completion dump and plugin caches go
+# somewhere writable and disposable.
+export ZSH_CACHE_DIR="${HOME:-/tmp}/.cache/omz"
+export ZSH_COMPDUMP="$ZSH_CACHE_DIR/.zcompdump"
+mkdir -p "$ZSH_CACHE_DIR/completions"
+
+# zsh-syntax-highlighting must load last; history-substring-search binds its
+# keys against the highlighter, so it follows.
+plugins=(
+  git gitfast
+  rust python pip
+  podman debian
+  colored-man-pages extract dirhistory sudo safe-paste
+  zsh-autosuggestions
+  zsh-syntax-highlighting
+  history-substring-search
+)
+
+source $ZSH/oh-my-zsh.sh
+
+bindkey '^[[A' history-substring-search-up
+bindkey '^[[B' history-substring-search-down
+
+# History is per-container and therefore throwaway, but keep it usable within a
+# session.
+HISTFILE="$ZSH_CACHE_DIR/zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt hist_ignore_dups share_history
+
+# The workspace is bind-mounted at its real host path; start there when the
+# invocation directory is not otherwise meaningful.
+alias ll='ls -alh'
+ZSHRC
+
+# Lets tooling detect that it is running inside the toolchain image.
+ENV TEMPO_TOOLCHAIN=1
+
+# Cross prefix and arch are baked in; override on the command line if needed.
+ENV ARCH=arm
+ENV CROSS_COMPILE=arm-linux-gnueabihf-
+
+# Native Linux daemon builds/tests require the host-architecture ALSA headers.
+RUN apt-get update && apt-get install -y --no-install-recommends libasound2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Linux Toolbox GUI compilation stays inside the toolchain as well.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang ninja-build libgtk-3-dev libmpv-dev libepoxy-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bootstrap copies this standalone client into the checkout, so the host's Git
+# transport and credentials hydrate firmware without a host Git LFS install.
+# binfmt-support activates only Debian's ARM definition when bootstrap needs it.
+RUN apt-get update && apt-get install -y --no-install-recommends git-lfs binfmt-support \
+    && rm -rf /var/lib/apt/lists/*

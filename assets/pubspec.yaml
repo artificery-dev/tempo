@@ -1,0 +1,20 @@
+name: tempo_assets
+description: Shared Tempo artwork for the player, Toolbox, and platform builds.
+version: 0.1.0
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  assets:
+    - tempo/web/icon-512.png
+    - tempo/web/icon-192.png
+    - tempo/web/icon-maskable-512.png
+    - tempo/web/apple-touch-icon.png
+    - tempo/web/favicon.svg

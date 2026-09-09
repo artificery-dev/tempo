@@ -1,0 +1,13 @@
+[Unit]
+Description=Power on the MT6582 WiFi function through WMT
+ConditionPathExists=/dev/wmtWifi
+Before=wpa_supplicant-nl80211@wlan0.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'printf 1 > /dev/wmtWifi'
+ExecStop=/bin/sh -c 'printf 0 > /dev/wmtWifi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

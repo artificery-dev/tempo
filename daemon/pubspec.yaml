@@ -1,0 +1,30 @@
+name: tempod
+publish_to: none
+version: 0.1.0
+resolution: workspace
+environment:
+  sdk: ^3.12.2
+dependencies:
+  tempo_data:
+    path: ../packages/tempo_data
+  file: ^7.0.1
+  cadence_media:
+    git:
+      url: ssh://git@pi-cluster-00.neon-bramble.ts.net/artificer/cadence.git
+      path: packages/media
+      ref: develop
+  daemon_client:
+    path: ../packages/daemon_client
+  path: ^1.9.1
+  dbus: ^0.7.15
+  args: ^2.7.0
+  ffi: ^2.1.0
+  player_api:
+    path: ../packages/player_api
+  relic: ^1.2.0
+  web_socket: ^1.0.1
+dev_dependencies:
+  tempo_build:
+    path: ../packages/tempo_build
+  lints: ^6.0.0
+  test: ^1.26.0

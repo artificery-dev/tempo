@@ -1,0 +1,46 @@
+Emit integral JSON numbers as integers, not %g
+
+flutter-pi's JSON message codec prints every number with %g, which
+flips to exponent notation past ~1e6. Dart's json.decode turns that
+into a double, and the framework's raw-key parser (RawKeyEvent
+.fromMessage) casts keyCode fields with `as int?` - so every key whose
+xkb keysym is an XF86 code (~0x1008FFxx = 2.7e8: media keys, power,
+browser back...) threw a _TypeError in the platform message callback
+and the key never reached the app. Integral values now print as
+integers; genuine fractions keep %g.
+
+Applies to ardera/flutter-pi master (Sep 2026), src/platformchannel.c.
+Worth upstreaming.
+---
+--- a/src/platformchannel.c
++++ b/src/platformchannel.c
+@@ -437,7 +437,10 @@
+         case kJsonNull:
+         case kJsonTrue: return 4;
+         case kJsonFalse: return 5;
+-        case kJsonNumber:; char numBuffer[32]; return sprintf(numBuffer, "%g", value->number_value);
++        case kJsonNumber:; char numBuffer[32];
++            if (value->number_value == (double) (int64_t) value->number_value)
++                return sprintf(numBuffer, "%lld", (long long) value->number_value);
++            return sprintf(numBuffer, "%g", value->number_value);
+         case kJsonString:
+             size = 2;
+ 
+@@ -482,7 +485,16 @@
+         case kJsonNull: *pbuffer += sprintf((char *) *pbuffer, "null"); break;
+         case kJsonTrue: *pbuffer += sprintf((char *) *pbuffer, "true"); break;
+         case kJsonFalse: *pbuffer += sprintf((char *) *pbuffer, "false"); break;
+-        case kJsonNumber: *pbuffer += sprintf((char *) *pbuffer, "%g", value->number_value); break;
++        case kJsonNumber:
++            /* Integral values must print as integers: %g flips to exponent
++             * notation past 1e6, and Dart json-decodes that to a double,
++             * which the framework raw-key parser refuses (XF86 keysyms are
++             * ~2.7e8, so every media/power/back key died of this). */
++            if (value->number_value == (double) (int64_t) value->number_value)
++                *pbuffer += sprintf((char *) *pbuffer, "%lld", (long long) value->number_value);
++            else
++                *pbuffer += sprintf((char *) *pbuffer, "%g", value->number_value);
++            break;
+         case kJsonString:
+             *((*pbuffer)++) = '\"';
+ 

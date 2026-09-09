@@ -1,0 +1,13 @@
+[Unit]
+Description=Clear the FORCE_REINSTALL flag from the microSD (one-shot)
+After=tempo-sdmount.service local-fs.target
+ConditionPathExists=!/var/lib/tempo-reinstall-cleared
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/tempo-system/tempo-system clear-reinstall-flag
+ExecStartPost=/bin/touch /var/lib/tempo-reinstall-cleared
+
+[Install]
+WantedBy=multi-user.target

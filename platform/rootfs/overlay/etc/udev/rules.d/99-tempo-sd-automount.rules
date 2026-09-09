@@ -1,0 +1,4 @@
+# Auto-mount the microSD (first partition) at /mnt/sd via tempo-sdmount.service
+# on insert, and at boot when udev replays coldplug add events. Removal stops
+# the service (it BindsTo dev-mmcblk1p1.device), which unmounts.
+SUBSYSTEM=="block", KERNEL=="mmcblk1p1", ACTION=="add", ENV{SYSTEMD_WANTS}+="tempo-sdmount.service"

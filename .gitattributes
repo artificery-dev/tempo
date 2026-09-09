@@ -1,0 +1,7 @@
+# The vendor firmware under platform/firmware/ is binary and some of it is large (the
+# download agent most of all), so it goes through Git LFS rather than into the
+# object store. The scatter and the two 512-byte partition tables are small
+# and diffable enough to stay ordinary blobs.
+platform/firmware/DA.img              filter=lfs diff=lfs merge=lfs -text
+platform/firmware/stock/*.bin         filter=lfs diff=lfs merge=lfs -text
+platform/firmware/stock/*.img         filter=lfs diff=lfs merge=lfs -text

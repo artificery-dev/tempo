@@ -1,0 +1,42 @@
+{
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/flutter/ephemeral": true,
+    "**/Flutter/ephemeral": true,
+    "**/.symlinks": true,
+    "**/.plugin_symlinks": true,
+    "**/build": true
+  },
+
+  // Formatting for this workspace. Markdown is owned by Prettier
+  // (.prettierrc.json); Rust is owned by rustfmt via rust-analyzer
+  // (rustfmt.toml). Prettier is told to skip *.rs in .prettierignore.
+  "editor.formatOnSave": true,
+
+  // The Flutter SDK is the one fvm pins for this workspace (.fvmrc,
+  // config.yaml's flutter.sdk_version), through the symlink fvm keeps.
+  // Without this the Dart extension takes the global `flutter`, which on
+  // a machine whose default is another channel rewrites the workspace's
+  // package config and lock to that SDK's packages and breaks
+  // `toolbox dev workspace test` until dependencies are resolved again.
+  "dart.flutterSdkPath": ".fvm/flutter_sdk",
+
+  // Build outputs include a separate Flutter SDK for Toolbox. Its internal
+  // workspace must not be resolved with the device SDK above. Archived
+  // projects are historical inputs, not editor workspace members.
+  "dart.analysisExcludedFolders": ["build", "archive"],
+
+  "[markdown]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
+  }
+}
