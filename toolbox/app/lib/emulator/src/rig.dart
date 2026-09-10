@@ -474,6 +474,14 @@ class Rig extends ChangeNotifier {
           };
     // Mounting the card is a change to the machine, not just to a reading.
     places.value = _machine();
+    // A card on its way out takes whatever was playing with it, as the
+    // device does when Cadence reports the volume detached - before the
+    // profile is looked at, so the sound stops even when nothing restarts.
+    if (!_cardInserted) {
+      final services = _services;
+      if (services != null) unawaited(services.playback.stop());
+      unawaited(VideoPlayback.active?.stop());
+    }
     if (_storageInitialized) _followCard();
     notifyListeners();
   }

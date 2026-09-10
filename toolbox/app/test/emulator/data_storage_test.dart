@@ -117,6 +117,21 @@ void main() {
     await rig.closeProfile();
     rig.dispose();
   });
+  test('pulling the card stops whatever was playing', () async {
+    final rig = Rig();
+    rig.cardInserted = true;
+    await rig.initializeStorage();
+    final playback = rig.services.playback;
+    await playback.play(const [
+      TrackSummary(id: 1, fileId: 1, path: '/mnt/sd/Music/a.flac', title: 'a'),
+    ]);
+    expect(playback.value.hasTrack, isTrue);
+    rig.cardInserted = false;
+    await rig.cardSettled;
+    expect(playback.value.hasTrack, isFalse);
+    await rig.closeProfile();
+    rig.dispose();
+  });
   test('adopting existing memory card never overwrites its profile', () async {
     final rig = Rig();
     rig.cardSource = CardSource.inMemory;
