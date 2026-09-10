@@ -8,7 +8,7 @@
 PRODUCT_NAME = tempo_toolbox
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.tempo.tempoToolbox
+PRODUCT_BUNDLE_IDENTIFIER = dev.artificery.tempo.toolbox
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.tempo. All rights reserved.
