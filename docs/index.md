@@ -23,10 +23,6 @@ Start with the section that matches what you came here to do:
   [Reference](#reference) section has the configuration keys, the `toolbox dev`
   command list and a glossary.
 
-Pages marked **(exists)** are written; pages marked **(cited)** are already
-referenced from code or configuration and are next to be written. Everything
-else is planned.
-
 ## Getting started
 
 For people who want Tempo on their Y2.
@@ -72,7 +68,7 @@ The Flutter application that runs on the device and in the emulator.
 
 - [Architecture](app/architecture.md): `app/`, `tempo_core`, `player_api`,
   `daemon_client`, the service interfaces the emulator mocks.
-- [flutter-pi and engine pairing](app/flutter-pi.md) **(cited)**: the pinned
+- [flutter-pi and engine pairing](app/flutter-pi.md): the pinned
   embedder, engine binaries and AOT snapshot, the `tempo_kms` display library,
   why the Flutter version cannot move freely.
 - [Interface](app/interface.md): dock, menu tree, screens, UI scale, wheel
@@ -81,7 +77,7 @@ The Flutter application that runs on the device and in the emulator.
   persistence in the profile, migration.
 - [Playback](app/playback.md): libmpv over PipeWire, video, FM radio, output
   routing and Bluetooth, volume and the OSD.
-- [Cadence integration](app/cadence-integration.md) **(exists)**: the media
+- [Cadence integration](app/cadence-integration.md): the media
   library daemon, datastore locations, relocation, the eject contract.
 - [Storage and profiles](app/storage.md): `tempo_data` profiles, XDG layout,
   internal vs SD data storage, eject and format flows.
@@ -91,7 +87,7 @@ The Flutter application that runs on the device and in the emulator.
 
 `tempod`, the privileged service host the player talks to.
 
-- [tempod](app/daemon.md) **(cited)**: what it owns, the socket, systemd units,
+- [tempod](app/daemon.md): what it owns, the socket, systemd units,
   the plymouth to flutter-pi handoff, credentials.
 - [Event protocol and HTTP transport](daemon/protocol.md): the app to daemon
   events in `player_api`, the `/api/v1` surface, authentication.
@@ -121,7 +117,7 @@ The installer and emulator host, as a desktop app, browser app and CLI.
 
 The operating system underneath the app.
 
-- [Boot and flashing](platform/boot-and-flashing.md) **(cited)**: the MediaTek
+- [Boot and flashing](platform/boot-and-flashing.md): the MediaTek
   boot chain, preloader, LK, the eMMC layout and the scatter offset shift,
   where Tempo writes and where it never does.
 - [Kernel](platform/kernel.md): the Linux fork and branch, the submodule pin,
@@ -132,7 +128,7 @@ The operating system underneath the app.
   holding the animation until first frame.
 - [Tempo Recovery](platform/recovery.md): the RAM-booted transfer environment,
   packaging, service and display, entry paths.
-- [Radio initialization](platform/radio-initialization.md) **(exists)**: the
+- [Radio initialization](platform/radio-initialization.md): the
   modem firmware bootstrap that brings up the shared radio hardware.
 - [Firmware inputs](platform/firmware-inputs.md): the stock ROM, the download
   agent, what is carried in Git LFS and what is never committed.
@@ -145,7 +141,7 @@ The operating system underneath the app.
 Hardware knowledge that would matter to anyone bringing up this SoC or a
 similar player.
 
-- [Display](porting/display.md) **(cited)**: DSI panel, the RDMA/DSI drivers,
+- [Display](porting/display.md): DSI panel, the RDMA/DSI drivers,
   the RGB565 framebuffer, Mali through lima.
 - [Input](porting/input.md): the click wheel and buttons through libinput.
 - [Audio](porting/audio.md): codec, PipeWire realtime setup, headphones as
