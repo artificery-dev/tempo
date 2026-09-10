@@ -544,7 +544,7 @@ const _controls = SettingNode.group(
           id: 'acceleration',
           label: 'Acceleration',
           summary:
-              'Scroll faster to skip items, or for 1.5 seconds in one direction to browse letters',
+              'Scroll faster to skip items, or briefly in one direction to browse letters',
           bind: 'wheel.acceleration',
           defaultValue: true,
         ),
@@ -1819,8 +1819,8 @@ const _storage = SettingNode.group(
   children: [
     SettingNode.page(
       id: 'data',
-      label: 'Tempo Data Storage',
-      summary: 'Choose Yes, No or Ask for SD card storage',
+      label: 'Tempo Data Location',
+      summary: 'Internal or External; defaults to External with confirmation',
       screen: 'data-storage',
     ),
     SettingNode.page(
@@ -1836,12 +1836,17 @@ const _storage = SettingNode.group(
       summary: 'View information about the inserted SD card',
       bind: 'storage.card',
     ),
-    SettingNode.action(
-      id: 'eject',
+    SettingNode.page(
+      id: 'eject-sd',
       label: 'Eject SD Card',
-      summary: 'Unmount the SD card before removing it',
-      icon: 'eject',
-      bind: 'storage.eject',
+      summary: 'Finish library work and safely remove the card',
+      screen: 'eject-sd',
+    ),
+    SettingNode.page(
+      id: 'format-sd',
+      label: 'Format SD Card',
+      summary: 'Erase the SD card and format it as exFAT',
+      screen: 'format-sd',
     ),
     SettingNode.divider(id: 'div-files'),
     SettingNode.toggle(

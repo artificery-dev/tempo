@@ -11,6 +11,8 @@ environment:
   sdk: ^3.12.2
 
 dependencies:
+  cadence_client:
+    path: ../cadence_client
   tempo_assets:
     path: ../../assets
   player_api:

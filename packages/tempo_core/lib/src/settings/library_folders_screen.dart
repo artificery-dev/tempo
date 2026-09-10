@@ -56,11 +56,14 @@ class _SectionFoldersState extends State<_SectionFolders> {
     if (roots == null) {
       next.remove(widget.section.name);
     } else {
-      next[widget.section.name] = roots;
+      final library = PlayerServicesScope.of(context).library;
+      next[widget.section.name] = library is CollectionLibrary
+          ? roots.map(library.encodeFolderPath).toList()
+          : roots;
     }
     settings.set(libraryFoldersPath, next);
     final service = PlayerServicesScope.of(context).library;
-    if (service is MediaLibrary) service.configureFolders(next);
+    if (service is CollectionLibrary) service.configureFolders(next);
     setState(() {});
   }
 
@@ -72,7 +75,7 @@ class _SectionFoldersState extends State<_SectionFolders> {
 
   Widget _content(BuildContext context, LibraryStatus status) {
     final library = PlayerServicesScope.of(context).library;
-    if (library is! MediaLibrary) {
+    if (library is! CollectionLibrary) {
       return const PanelScreen(
         title: 'Library Folders',
         child: ContentMessage(

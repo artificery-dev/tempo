@@ -16,6 +16,7 @@ const firmwareBuildSteps = <List<String>>[
   ['app', 'flutter-pi', 'build'],
   ['app', 'build', '--release'],
   ['daemon', 'build', '--target', 'arm'],
+  ['cadence', 'build'],
   ['os', 'splash', 'assets'],
   ['os', 'splash', 'build'],
   ['os', 'rootfs', 'build'],

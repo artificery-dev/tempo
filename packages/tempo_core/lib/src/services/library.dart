@@ -105,6 +105,19 @@ abstract class LibraryService {
   Future<void> dispose();
 }
 
+/// Shelf and folder controls shared by the device client and emulator.
+abstract class CollectionLibrary implements LibraryService {
+  ValueListenable<List<TrackSummary>> shelf(LibrarySection section);
+  bool isVideo(TrackSummary track);
+  List<String> rootsFor(LibrarySection section);
+  void configureFolders(Object? value);
+  LibraryRoots? get locations;
+  String encodeFolderPath(String path);
+  set scanOnStartup(bool value);
+  set scanOnCard(bool value);
+  set recheck(String value);
+}
+
 /// A library with nothing in it and nowhere to look: what a widget gets
 /// when nobody installed one, and what a test that never asks for music
 /// mounts.
@@ -150,7 +163,7 @@ typedef LibraryRoots = List<String> Function();
 /// covers decoded during the scan it indexed a file every two seconds;
 /// without, twelve a second. The pictures are made afterwards by the
 /// service's artwork queue, at low priority, the rows on screen first.
-class MediaLibrary implements LibraryService {
+class MediaLibrary implements CollectionLibrary {
   /// The player's scan budget.
   static const playerPolicy = ScanPolicy(
     identity: IdentityHash.sampled,
@@ -241,6 +254,7 @@ class MediaLibrary implements LibraryService {
   String? _remoteVersion;
   final LibraryRoots _roots;
   final List<String> Function(LibrarySection)? sectionRoots;
+  @override
   final LibraryRoots? locations;
   final _ids = <LibrarySection, int>{};
   final _shelves = <LibrarySection, ValueNotifier<List<TrackSummary>>>{};
@@ -248,13 +262,19 @@ class MediaLibrary implements LibraryService {
   Map<String, List<String>> _configured = {};
   final _defaultRoots = <LibrarySection, Set<String>>{};
 
+  @override
   ValueListenable<List<TrackSummary>> shelf(LibrarySection section) =>
       section == LibrarySection.music
       ? tracks
       : _shelves.putIfAbsent(section, () => ValueNotifier(const []));
 
+  @override
+  String encodeFolderPath(String path) => path;
+
+  @override
   bool isVideo(TrackSummary track) => _videoFiles.contains(track.fileId);
 
+  @override
   List<String> rootsFor(LibrarySection section) {
     final configured = _configured[section.name];
     if (configured != null) return configured;
@@ -268,6 +288,7 @@ class MediaLibrary implements LibraryService {
 
   /// Missing cards keep their roots; an explicit settings change releases
   /// a removed root on the next scan without deleting its files.
+  @override
   void configureFolders(Object? value) {
     _configured = {
       if (value is Map)

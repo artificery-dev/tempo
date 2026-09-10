@@ -8,6 +8,7 @@ import 'process.dart';
 import 'app.dart';
 import 'embedder.dart';
 import 'daemon.dart';
+import 'cadence.dart';
 import 'toolbox.dart';
 import 'kernel.dart';
 import 'rootfs.dart';
@@ -27,6 +28,7 @@ const developerHelp = """toolbox dev [--repo PATH] <area> <action> [arguments]
   build (complete firmware, including the installer .y2-firmware)
   app build [--release] | deploy [--release] [--dry-run] | attach | clean
   app flutter-pi build|test|engine|rev|clean
+  cadence build
   daemon build [--target host|arm] [--dart-only] | deploy [--dry-run] | test|check|clean
   emulator run [Flutter run arguments] | mcp | clean
   workspace get|analyze|test|format
@@ -170,6 +172,11 @@ Future<int> runDeveloperCommand(
       return await emulatorCommand(repository, config, runner, action, args);
     if (area == 'toolbox')
       return await toolboxCommand(repository, config, runner, action, args);
+    if (area == 'cadence')
+      return await cadenceCommand(repository, config, runner, [
+        action,
+        ...args,
+      ]);
     if (area == 'daemon')
       return await daemonCommand(repository, config, runner, [
         if (action.isNotEmpty) action,

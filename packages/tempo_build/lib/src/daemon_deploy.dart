@@ -99,7 +99,7 @@ Map<String, String> daemonServiceDropins(BuildConfig config) {
     '/etc/systemd/system/tempod.socket.d/10-group.conf':
         '[Socket]\nSocketGroup=$user\n',
     '/etc/systemd/system/tempod.service.d/20-runtime.conf':
-        '[Service]\nExecStartPre=\nExecStartPre=/usr/local/sbin/tempod --init-credentials --credential-group $user\nEnvironment=TEMPOD_PROFILE_HOME=/home/$user\nEnvironment=TEMPOD_PROFILE_USER=$user\nEnvironment=TEMPOD_SD_ROOT=/mnt/sd\nEnvironment=TEMPOD_MEDIA_DATABASE=/home/$user/.tempo/library.db\nEnvironment=TEMPOD_SETTINGS_FILE=/home/$user/.config/tempo/settings.json\n',
+        '[Service]\nExecStartPre=\nExecStartPre=/usr/local/sbin/tempod --init-credentials --credential-group $user\nEnvironment=TEMPOD_PROFILE_HOME=/home/$user\nEnvironment=TEMPOD_PROFILE_USER=$user\nEnvironment=TEMPOD_SD_ROOT=/mnt/sd\nEnvironment=TEMPOD_SETTINGS_FILE=/home/$user/.config/tempo/settings.json\n',
     '/etc/systemd/system/tempo.service.d/20-daemon.conf':
         '[Service]\nEnvironment=TEMPOD_API_URL=http://127.0.0.1:8765\nEnvironment=TEMPOD_API_TOKEN_FILE=/var/lib/tempod/credentials/api-token\nEnvironment=TEMPOD_OWNER_TOKEN_FILE=/var/lib/tempod/credentials/owner-token\n',
   };

@@ -28,8 +28,16 @@ Future<void> ensureProfileAccess(
       }
       ancestor = ancestor.parent;
     }
+    // Also assign newly created XDG ancestors to the frontend account. A
+    // root-owned .config would otherwise prevent that user managing its files.
+    final created = <String>[];
+    var missing = directory;
+    while (!await missing.exists() && missing.path != missing.parent.path) {
+      created.add(missing.path);
+      missing = missing.parent;
+    }
     await directory.create(recursive: true);
-    dirs.add(directory.path);
+    dirs.addAll({...created, directory.path});
     await for (final entry in directory.list(
       recursive: true,
       followLinks: false,

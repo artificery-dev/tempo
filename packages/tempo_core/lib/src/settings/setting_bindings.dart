@@ -214,7 +214,7 @@ abstract final class PlayerSettings {
     SettingBindings.registerAll(sinks(services, settings: settings));
     SettingBindings.registerActions(actions(services, settings: settings));
     final bridge = SettingsBridge(settings: settings)..attach();
-    if (services.library case final MediaLibrary library) {
+    if (services.library case final CollectionLibrary library) {
       library.configureFolders(settings.value('/settings/library/roots'));
       library.scanOnStartup =
           settings.value('/settings/library/scan-on-boot') != false;
@@ -296,22 +296,22 @@ abstract final class PlayerSettings {
     Settings? settings,
   }) => {
     'library.scanOnBoot': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.scanOnStartup = change.to == true;
       }
     },
     'library.scanOnCard': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.scanOnCard = change.to == true;
       }
     },
     'library.recheck': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.recheck = '${change.to}';
       }
     },
     'library.roots': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.configureFolders(change.to);
       }
     },

@@ -32,7 +32,7 @@ void main() {
     expect(file.existsSync(), isFalse);
     await Future<void>.delayed(AppletState.settle * 2);
     expect(file.existsSync(), isTrue);
-    expect(file.path, '/home/tempo/.tempo/applets/apps.files.json');
+    expect(file.path, '/home/tempo/.local/share/tempo/applets/apps.files.json');
     expect(jsonDecode(file.readAsStringSync()), {
       'open': ['/home/tempo/Music'],
       'showHidden': true,

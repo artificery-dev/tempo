@@ -18,7 +18,8 @@ import '../services/video_playback.dart';
 void playVideo(BuildContext context, TrackSummary track) {
   final services = PlayerServicesScope.of(context);
   VideoPlayback.active?.dispose();
-  final video = VideoPlayback()..attach(volume: services.volume);
+  final video = VideoPlayback(resolvePath: services.resolveLibraryPath)
+    ..attach(volume: services.volume);
   VideoPlayback.active = video;
   MenuDock.select(systemMenu.at('/home')!);
   unawaited(

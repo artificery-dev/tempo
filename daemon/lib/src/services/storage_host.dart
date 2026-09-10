@@ -30,7 +30,18 @@ final class StorageHost {
     final store = manager();
     try {
       _active = await store.applyPendingAtStartup();
+    } on TempoDatastoreMoveRejected catch (error) {
+      _active = await store.resolveStartup();
+      _restartError = error.message;
+      log?.call(error.message);
     } catch (error) {
+      if (store.readPendingRequest()?.started == true) {
+        _recoveryBlocked = true;
+        _startupError =
+            'Library move is incomplete. Reinsert the original card and retry: $error';
+        log?.call(_startupError!);
+        return;
+      }
       // Still before any profile owner opens. Roll back/finish the journal now,
       // never in an authenticated POST while the daemon is serving consumers.
       try {
@@ -66,23 +77,26 @@ final class StorageHost {
         sd != null && store.fs.directory(store.cardRoot!).existsSync();
     final sdExists = sdAvailable && store.fs.directory(sd.data).existsSync();
     final paths = _active?.activePaths;
-    final available =
-        _startupError == null &&
-        paths != null &&
-        (policy != TempoStoragePolicy.yes || sdExists);
+    // Device configuration is internal even when Cadence metadata is on an
+    // absent card. Losing media must not suspend wallpaper/settings writes.
+    final available = _startupError == null && paths != null;
     if (!available && error == null) {
       error =
           'The selected profile is unavailable. Reinsert the selected card or choose the device profile.';
     }
     return StorageStatus(
       policy: policy.name,
-      location: policy == TempoStoragePolicy.yes ? 'sd' : 'device',
+      location: _active?.location == TempoStorageLocation.sd ? 'sd' : 'device',
       available: available,
       mediaHome: mediaHome,
       dataPath: available ? paths.data : null,
-      configPath: available ? paths.config : null,
+      configPath: store.devicePaths.config,
       sdAvailable: sdAvailable,
-      needsPrompt: policy == TempoStoragePolicy.ask && sdExists && !_dismissed,
+      needsPrompt:
+          policy != TempoStoragePolicy.no &&
+          _active?.location != TempoStorageLocation.sd &&
+          sdAvailable &&
+          !_dismissed,
       restartPending: pending,
       error: error,
       deviceProfileExists:
@@ -95,6 +109,24 @@ final class StorageHost {
   StorageStatus dismissOffer() {
     if (_closed) throw StateError('Storage service closed');
     _dismissed = true;
+    return status;
+  }
+
+  StorageStatus retryPending() {
+    if (_closed || _busy || manager().readPendingRequest() == null) {
+      throw StateError('No pending library move can be retried');
+    }
+    _restartTimer?.cancel();
+    _restartError = null;
+    _restartTimer = Timer(restartDelay, () async {
+      try {
+        await restart();
+      } catch (error) {
+        _restartError =
+            'Restart failed; the original library move remains pending.';
+        log?.call('Storage retry could not restart services: $error');
+      }
+    });
     return status;
   }
 
@@ -115,7 +147,7 @@ final class StorageHost {
       if (current.available &&
           !current.restartPending &&
           ((current.location == 'device' && policy != TempoStoragePolicy.yes) ||
-              current.policy == policy.name)) {
+              (current.policy == policy.name && current.location == 'sd'))) {
         // This changes only the selector, never recovers or touches open data.
         await store.setPolicy(policy);
         _active = TempoStorageDecision(
@@ -162,6 +194,30 @@ final class StorageHost {
       }
       log?.call('Storage restart failed (${error.runtimeType}).');
     }
+  }
+
+  String? _cardIdentity;
+  bool _observedCard = false;
+  void observeCard(String? identity) {
+    final changed = _observedCard && identity != _cardIdentity;
+    _observedCard = true;
+    _cardIdentity = identity;
+    if (!changed ||
+        identity == null ||
+        _closed ||
+        _busy ||
+        status.restartPending ||
+        status.policy != 'yes') {
+      return;
+    }
+    _restartTimer?.cancel();
+    _restartTimer = Timer(restartDelay, () async {
+      try {
+        await restart();
+      } catch (error) {
+        log?.call('Could not reopen card library: $error');
+      }
+    });
   }
 
   Future<void> close() async {

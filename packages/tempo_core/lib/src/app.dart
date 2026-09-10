@@ -114,16 +114,16 @@ class _TempoAppState extends State<TempoApp> {
     }
     final navigator = TempoApp._navigator.currentState;
     if (navigator == null) return;
-    _storagePrompted = true;
-    if (status.policy != DataStoragePolicy.ask ||
+    if (status.policy == DataStoragePolicy.no ||
         !status.promptAvailable ||
-        !status.cardPresent ||
-        !status.cardProfileExists) {
+        !status.cardPresent) {
       return;
     }
+    _storagePrompted = true;
     unawaited(
       navigator.push(
         DialogRoute<void>(
+          barrierDismissible: false,
           theme: UiScale.regular.theme(Appearance.brightness.value),
           builder: (context) => DataStoragePrompt(
             controller: controller,
@@ -185,6 +185,9 @@ class _TempoAppState extends State<TempoApp> {
     PlayerSettingScreens.install();
     _dataStorage = (widget.services ?? PlayerServices.fallback).dataStorage;
     _dataStorage?.beforeChange = () async {
+      final services = widget.services ?? PlayerServices.fallback;
+      await services.playback.stop();
+      await VideoPlayback.active?.stop();
       await _openingSettings;
       AppletState.flushForStorageChange();
       await _file?.flushForStorageChange();

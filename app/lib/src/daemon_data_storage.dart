@@ -7,12 +7,12 @@ import 'package:tomeui/tomeui.dart';
 
 /// Keeps bootstrap policy out of the settings profile that can move.
 final class DaemonDataStorage extends ValueNotifier<DataStorageStatus>
-    implements DataStorageController {
+    implements DataStorageController, RetryableDataStorage {
   DaemonDataStorage(this.client, StorageStatus status)
     : remote = status,
       super(_reading(status)) {
     _poll = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!value.available || value.restarting) unawaited(refresh());
+      unawaited(refresh());
     });
   }
 
@@ -70,6 +70,22 @@ final class DaemonDataStorage extends ValueNotifier<DataStorageStatus>
       if (!_disposed) value = _reading(remote);
     } catch (error) {
       if (!_disposed) value = _reading(remote, error: error.toString());
+      rethrow;
+    } finally {
+      _changing = false;
+    }
+  }
+
+  @override
+  Future<void> retryPending() async {
+    if (_changing || _disposed) return;
+    _changing = true;
+    try {
+      value = _reading(remote, busy: true);
+      remote = await client.retryPending();
+      if (!_disposed) value = _reading(remote);
+    } catch (error) {
+      if (!_disposed) value = _reading(remote, error: '$error');
       rethrow;
     } finally {
       _changing = false;

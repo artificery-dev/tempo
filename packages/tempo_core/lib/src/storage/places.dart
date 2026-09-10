@@ -32,7 +32,7 @@ class Places {
     this.sdCard = '/mnt/sd',
     this.root = '/',
   }) : config = config ?? p.posix.join(home, '.config', 'tempo'),
-       data = data ?? p.posix.join(home, '.tempo');
+       data = data ?? p.posix.join(home, '.local', 'share', 'tempo');
 
   /// The whole machine.
   final FileSystem fileSystem;

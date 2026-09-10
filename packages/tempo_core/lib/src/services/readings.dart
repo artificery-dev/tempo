@@ -28,12 +28,20 @@ class BatteryReading {
 
 @immutable
 class StorageReading {
-  const StorageReading({this.present = false, this.label, this.path});
+  const StorageReading({
+    this.present = false,
+    this.label,
+    this.path,
+    this.busy = false,
+  });
 
   /// An empty slot.
   static const empty = StorageReading();
 
   final bool present;
+
+  /// False is observed idle; null is unknown. Neither guarantees safe removal.
+  final bool? busy;
 
   /// What the card calls itself.
   final String? label;
@@ -51,8 +59,9 @@ class StorageReading {
       other is StorageReading &&
       other.present == present &&
       other.label == label &&
-      other.path == path;
+      other.path == path &&
+      other.busy == busy;
 
   @override
-  int get hashCode => Object.hash(present, label, path);
+  int get hashCode => Object.hash(present, label, path, busy);
 }

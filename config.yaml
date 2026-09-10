@@ -198,6 +198,8 @@ rootfs:
     # Networking is systemd-networkd + systemd-resolved, both shipped with
     # systemd itself, so nothing is needed here for the gadget link.
     system:
+      - exfatprogs
+      - fdisk
       # resolved is not in the bootstrap set above: it depends on the virtual
       # default-dbus-system-bus, which debootstrap --include cannot resolve
       # (the second stage fails on it). apt can, and dbus is named outright

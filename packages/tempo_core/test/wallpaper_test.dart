@@ -94,41 +94,6 @@ void main() {
     );
   });
 
-  testWidgets('a wallpaper left in the home moves into the config folder', (
-    tester,
-  ) async {
-    machine.file('/home/tempo/.wallpaper.png').writeAsBytesSync(swirl);
-    await pump(tester);
-
-    expect((WallpaperSource.image.value as MemoryImage).bytes, swirl);
-    expect(
-      machine.file('/home/tempo/.config/tempo/wallpaper.png').existsSync(),
-      isTrue,
-      reason: 'it is in the config folder now',
-    );
-    expect(
-      machine.file('/home/tempo/.wallpaper.png').existsSync(),
-      isFalse,
-      reason: 'and only there: a move, not a copy',
-    );
-  });
-
-  testWidgets('one already in the config folder wins, and nothing is '
-      'deleted', (tester) async {
-    machine.file('/home/tempo/.wallpaper.png').writeAsBytesSync([1]);
-    machine
-        .file('/home/tempo/.config/tempo/wallpaper.png')
-        .writeAsBytesSync(swirl);
-    await pump(tester);
-
-    expect((WallpaperSource.image.value as MemoryImage).bytes, swirl);
-    expect(
-      machine.file('/home/tempo/.wallpaper.png').readAsBytesSync(),
-      [1],
-      reason: 'the one in the home is left where it is',
-    );
-  });
-
   testWidgets('with none, the player writes the default into the config '
       'folder', (tester) async {
     WallpaperSource.installDefault = true;

@@ -54,7 +54,7 @@ class DataStorageScreen extends StatelessWidget {
   const DataStorageScreen({super.key});
   @override
   Widget build(BuildContext context) => PanelScreen(
-    title: 'Tempo data storage',
+    title: 'Tempo Data Location',
     child: DataStorageChoices(
       controller: PlayerServicesScope.of(context).dataStorage,
     ),
@@ -81,10 +81,12 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
   String? _error;
   int _selected = 0;
   int? _collision;
+  int? _confirmMove;
   Future<void> _choose(
     int index, {
     bool replaceExisting = false,
     bool adoptExisting = false,
+    bool confirmed = false,
   }) async {
     final controller = widget.controller;
     if (controller == null ||
@@ -97,12 +99,25 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
     final status = controller.value;
     if (replaceExisting && !status.available) return;
     if (!widget.startup &&
+        !confirmed &&
         !replaceExisting &&
         !adoptExisting &&
         ((index == 0 && !status.usingCard && status.cardProfileExists) ||
             (index != 0 && status.usingCard && status.deviceProfileExists))) {
       setState(() {
         _collision = index;
+        _selected = 0;
+      });
+      return;
+    }
+    if (!widget.startup &&
+        ((index == 0 && !status.usingCard) ||
+            (index != 0 && status.usingCard)) &&
+        !replaceExisting &&
+        !adoptExisting &&
+        !confirmed) {
+      setState(() {
+        _confirmMove = index;
         _selected = 0;
       });
       return;
@@ -119,14 +134,22 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
           adoptExisting: adoptExisting,
         );
       } else if (index == 0) {
-        await controller.adoptCardForStartup();
+        await controller.setPolicy(
+          DataStoragePolicy.yes,
+          adoptExisting: status.cardProfileExists,
+        );
       } else if (index == 1) {
-        controller.skipStartup();
+        await controller.setPolicy(DataStoragePolicy.no);
       } else {
         await controller.setPolicy(DataStoragePolicy.no);
       }
       if (mounted && widget.startup) widget.onDone?.call();
-      if (mounted) setState(() => _collision = null);
+      if (mounted) {
+        setState(() {
+          _collision = null;
+          _confirmMove = null;
+        });
+      }
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
     } finally {
@@ -143,10 +166,120 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
     return ValueListenableBuilder<DataStorageStatus>(
       valueListenable: controller,
       builder: (context, status, _) {
+        if (!status.available &&
+            status.restarting &&
+            controller is RetryableDataStorage) {
+          Future<void> retry() async {
+            if (_pending || status.busy) return;
+            setState(() {
+              _pending = true;
+              _error = null;
+            });
+            try {
+              await (controller as RetryableDataStorage).retryPending();
+            } catch (error) {
+              if (mounted) setState(() => _error = '$error');
+            } finally {
+              if (mounted) setState(() => _pending = false);
+            }
+          }
+
+          return InputCapture(
+            active: true,
+            debugLabel: 'RetryLibraryMove',
+            captures: const {WheelInput.select},
+            releaseOn: const {},
+            onCapture: (intent) {
+              if (intent is ActivateIntent) retry();
+            },
+            child: _layout(
+              [
+                const Text('Finish moving your media library'),
+                const Text(
+                  'Keep the original SD card inserted. Retrying resumes the same move.',
+                ),
+                Text(_error ?? status.error ?? 'Library move is pending.'),
+              ],
+              [
+                Button(
+                  onPressed: _pending || status.busy ? null : retry,
+                  center: Text(
+                    _pending || status.busy ? 'Retrying…' : 'Retry move',
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
         final blocked = _pending || status.busy || status.restarting;
         final labels = widget.startup
-            ? ['Yes', 'No', "Don’t Ask Again"]
-            : ['Yes', 'No', 'Ask'];
+            ? ['Yes', 'No']
+            : ['Internal', 'External'];
+        if (_confirmMove case final destination?) {
+          void cancel() => setState(() {
+            _confirmMove = null;
+            _selected = 0;
+          });
+          return InputCapture(
+            active: true,
+            debugLabel: 'ConfirmStorageMove',
+            captures: const {
+              WheelInput.wheel,
+              WheelInput.select,
+              WheelInput.menu,
+              WheelInput.skip,
+            },
+            releaseOn: const {},
+            onCapture: (intent) {
+              if (blocked) return;
+              switch (intent) {
+                case JogIntent(:final amount):
+                  setState(() => _selected = (_selected + amount) % 2);
+                case ActivateIntent():
+                  if (_selected == 0) {
+                    cancel();
+                  } else {
+                    _choose(destination, confirmed: true);
+                  }
+                case WheelBackIntent() || WheelMenuIntent():
+                  cancel();
+                default:
+                  break;
+              }
+            },
+            child: _layout(
+              [
+                Text(
+                  destination == 0
+                      ? 'Move library data to the SD card?'
+                      : 'Move library data to internal storage?',
+                ),
+                const Text(
+                  'Moves the library database and cache, then restarts player services. Media files stay where they are. Device settings stay internal.',
+                ),
+                if (_error case final error?) Text(error),
+              ],
+              [
+                _outlined(
+                  0,
+                  Button(
+                    onPressed: blocked ? null : cancel,
+                    center: const Text('Cancel'),
+                  ),
+                ),
+                _outlined(
+                  1,
+                  Button(
+                    onPressed: blocked
+                        ? null
+                        : () => _choose(destination, confirmed: true),
+                    center: const Text('Move data'),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
         if (_collision case final index?) {
           return InputCapture(
             active: true,
@@ -170,7 +303,7 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                     _choose(
                       index,
                       adoptExisting: _selected == 0,
-                      replaceExisting: _selected == 1,
+                      confirmed: _selected == 1,
                     );
                   }
                 case WheelBackIntent() || WheelMenuIntent():
@@ -181,8 +314,10 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
             },
             child: _layout(
               [
-                const Text('Saved Tempo data already exists.'),
-                const Text('Moving replaces the saved data.'),
+                const Text('Saved media library data already exists.'),
+                const Text(
+                  'Moving can reuse a previous retired copy of this library. An active library cannot be overwritten.',
+                ),
                 const Text('Use existing keeps that profile.'),
                 if (_error case final error?)
                   Text(
@@ -206,7 +341,7 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                   Button(
                     onPressed: blocked || !status.available
                         ? null
-                        : () => _choose(index, replaceExisting: true),
+                        : () => _choose(index, confirmed: true),
                     center: const Text('Move current data'),
                   ),
                 ),
@@ -237,13 +372,18 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
             if (blocked) return;
             switch (intent) {
               case JogIntent(:final amount):
-                setState(() => _selected = (_selected + amount) % 3);
+                setState(
+                  () => _selected = (_selected + amount) % labels.length,
+                );
               case ActivateIntent():
-                _choose(_selected);
+                _choose(widget.startup ? _selected : 1 - _selected);
               case MediaIntent(command: MediaCommand.next):
-                setState(() => _selected = (_selected + 1) % 3);
+                setState(() => _selected = (_selected + 1) % labels.length);
               case MediaIntent(command: MediaCommand.previous):
-                setState(() => _selected = (_selected + 2) % 3);
+                setState(
+                  () => _selected =
+                      (_selected + labels.length - 1) % labels.length,
+                );
               case WheelBackIntent() || WheelMenuIntent():
                 if (widget.startup) {
                   _choose(1);
@@ -259,9 +399,11 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
               if (widget.startup) const Text('Use SD card data?'),
               Text(
                 widget.startup
-                    ? 'Use the saved Tempo profile on this card?'
+                    ? status.cardProfileExists
+                          ? 'Use the saved media library on this card? Device settings stay internal.'
+                          : 'Store media library metadata on this card? Device settings stay internal.'
                     : status.available
-                    ? 'Store Tempo data on the SD card?'
+                    ? 'Tempo Data Location'
                     : 'Choose available storage',
               ),
               if (_error ?? status.error case final error?)
@@ -272,11 +414,13 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                 ),
               if (!widget.startup && status.available)
                 Text(
-                  'Current choice: ${['Yes', 'No', 'Ask'][status.policy.index]}',
+                  'Preferred: ${status.policy == DataStoragePolicy.no ? 'Internal' : 'External'}',
                 ),
               if (!widget.startup && status.available)
                 Text(
-                  status.usingCard ? 'Using SD card' : 'Using device storage',
+                  status.usingCard
+                      ? 'Using external storage'
+                      : 'Using internal storage',
                 ),
               if (!status.cardPresent)
                 const Text('Insert SD, or use device data.'),
@@ -288,9 +432,12 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                 _outlined(
                   i,
                   Button(
-                    onPressed: blocked || (i == 0 && !status.cardPresent)
+                    onPressed:
+                        blocked ||
+                            ((widget.startup ? i == 0 : i == 1) &&
+                                !status.cardPresent)
                         ? null
-                        : () => _choose(i),
+                        : () => _choose(widget.startup ? i : 1 - i),
                     center: Text(labels[i]),
                   ),
                 ),

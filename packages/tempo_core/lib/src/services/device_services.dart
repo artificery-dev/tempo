@@ -119,11 +119,18 @@ class DevicePlaces extends ValueNotifier<Places> {
     fileSystem: const LocalFileSystem(),
     home: Platform.environment['HOME'] ?? '/root',
     config: _xdgConfig,
+    data: _xdgData,
   );
 
   /// `$XDG_CONFIG_HOME/tempo` when the session sets it; null lets [Places]
   /// fall back to `.config/tempo` under the home, which is what
   /// XDG_CONFIG_HOME defaults to anyway.
+  static String get _xdgData {
+    final home = Platform.environment['HOME'] ?? '/root';
+    final base = Platform.environment['XDG_DATA_HOME'];
+    return '${base == null || base.isEmpty ? '$home/.local/share' : base}/tempo';
+  }
+
   static String? get _xdgConfig {
     final base = Platform.environment['XDG_CONFIG_HOME'];
     return base == null || base.isEmpty ? null : '$base/tempo';

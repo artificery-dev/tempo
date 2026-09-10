@@ -22,6 +22,8 @@ Future<int> systemRuntimeCommand(
     'exe',
     '--target-os=linux',
     '--target-arch=arm',
+    '-DTEMPO_UID=${config.get('user.uid')}',
+    '-DTEMPO_GID=${config.get('user.gid')}',
     repo.path('platform/rootfs/tool/runtime.dart'),
     '-o',
     p.join(output, 'tempo-system'),

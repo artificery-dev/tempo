@@ -5,7 +5,7 @@ import 'package:file/memory.dart';
 import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
 
 class FakeStorage extends ValueNotifier<DataStorageStatus>
-    implements DataStorageController {
+    implements DataStorageController, RetryableDataStorage {
   FakeStorage([
     super.value = const DataStorageStatus(
       cardPresent: true,
@@ -39,9 +39,32 @@ class FakeStorage extends ValueNotifier<DataStorageStatus>
 
   @override
   void skipStartup() => calls.add('skip');
+  @override
+  Future<void> retryPending() async {
+    calls.add('retry');
+  }
 }
 
 void main() {
+  testWidgets(
+    'interrupted move offers retry without choosing a different store',
+    (tester) async {
+      final storage = FakeStorage(
+        const DataStorageStatus(
+          available: false,
+          restarting: true,
+          error: 'Move interrupted',
+        ),
+      );
+      await tester.pumpWidget(DataStorageRecoveryApp(controller: storage));
+      await tester.pumpAndSettle();
+      expect(find.text('Internal'), findsNothing);
+      expect(find.text('External'), findsNothing);
+      await tester.tap(find.text('Retry move'));
+      await tester.pumpAndSettle();
+      expect(storage.calls, ['retry']);
+    },
+  );
   testWidgets('startup waits for an authoritative snapshot and prompts once', (
     tester,
   ) async {
@@ -82,7 +105,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Use SD card data?'), findsNothing);
-    expect(storage.calls, ['skip']);
+    expect(storage.calls, ['no:false:false']);
     await tester.pumpWidget(const SizedBox());
     storage.value = const DataStorageStatus();
     await tester.pumpWidget(
@@ -93,6 +116,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     storage.value = const DataStorageStatus(
+      policy: DataStoragePolicy.no,
       cardPresent: true,
       cardProfileExists: true,
     );
@@ -100,6 +124,7 @@ void main() {
     expect(find.text('Use SD card data?'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     storage.value = const DataStorageStatus(
+      policy: DataStoragePolicy.no,
       cardPresent: true,
       cardProfileExists: true,
       promptAvailable: false,
@@ -118,7 +143,7 @@ void main() {
     final storage = FakeStorage(const DataStorageStatus(available: false));
     await tester.pumpWidget(DataStorageRecoveryApp(controller: storage));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('No'));
+    await tester.tap(find.text('Internal'));
     await tester.pumpAndSettle();
     expect(storage.calls, ['no:false:false']);
   });
@@ -140,7 +165,7 @@ void main() {
     await tester.pump();
     wheel.press(WheelButton.select);
     await tester.pumpAndSettle();
-    expect(storage.calls, ['skip']);
+    expect(storage.calls, ['no:false:false']);
     storage.value = const DataStorageStatus(
       cardPresent: true,
       restarting: true,
@@ -148,7 +173,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Yes'));
     await tester.pumpAndSettle();
-    expect(storage.calls, ['skip']);
+    expect(storage.calls, ['no:false:false']);
   });
   test(
     'storage flush waits for remote success and pause stops stale writes',
@@ -199,9 +224,8 @@ void main() {
   }
 
   for (final entry in {
-    'Yes': 'adopt',
-    'No': 'skip',
-    'Don’t Ask Again': 'no:false:false',
+    'Yes': 'yes:false:true',
+    'No': 'no:false:false',
   }.entries) {
     testWidgets('startup ${entry.key} dispatches only its intended action', (
       tester,
@@ -214,22 +238,34 @@ void main() {
       expect(storage.calls, [entry.value]);
       expect(finished, true);
       if (entry.key == 'No') {
-        expect(storage.value.policy, DataStoragePolicy.ask);
+        expect(storage.value.policy, DataStoragePolicy.no);
       }
     });
   }
-  testWidgets('picker updates policy without ordinary Settings persistence', (
-    tester,
-  ) async {
-    final storage = FakeStorage(const DataStorageStatus(cardPresent: true));
-    await show(tester, storage);
-    await tester.tap(find.text('Yes'));
-    await tester.pumpAndSettle();
-    expect(find.text('Current choice: Yes'), findsOneWidget);
-    await tester.tap(find.text('Ask'));
-    await tester.pumpAndSettle();
-    expect(storage.value.policy, DataStoragePolicy.ask);
-  });
+  testWidgets(
+    'external location requires confirmation and cancel keeps Internal',
+    (tester) async {
+      final storage = FakeStorage(
+        const DataStorageStatus(
+          policy: DataStoragePolicy.no,
+          cardPresent: true,
+        ),
+      );
+      await show(tester, storage);
+      await tester.tap(find.text('External'));
+      await tester.pumpAndSettle();
+      expect(storage.calls, isEmpty);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(storage.value.policy, DataStoragePolicy.no);
+      await tester.tap(find.text('External'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Move data'));
+      await tester.pumpAndSettle();
+      expect(storage.calls, ['yes:false:false']);
+      expect(find.text('Preferred: External'), findsOneWidget);
+    },
+  );
   testWidgets(
     'missing card disables Yes and failure preserves startup dialog',
     (tester) async {
@@ -250,17 +286,17 @@ void main() {
     },
   );
   testWidgets(
-    'existing destination requires explicit adoption or replacement',
+    'existing destination requires explicit adoption or a non-overwriting move',
     (tester) async {
       final storage = FakeStorage();
       await show(tester, storage);
-      await tester.tap(find.text('Yes'));
+      await tester.tap(find.text('External'));
       await tester.pumpAndSettle();
       expect(storage.calls, isEmpty);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(storage.calls, isEmpty);
-      await tester.tap(find.text('Yes'));
+      await tester.tap(find.text('External'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Use existing'));
       await tester.pumpAndSettle();
@@ -271,29 +307,25 @@ void main() {
         deviceProfileExists: true,
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('No'));
+      await tester.tap(find.text('Internal'));
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.text('Move current data'),
-      );
+      await tester.tap(find.text('Move current data'));
       await tester.pumpAndSettle();
-      expect(storage.calls.last, 'no:true:false');
+      expect(storage.calls.last, 'no:false:false');
       storage.value = const DataStorageStatus(
         usingCard: true,
         deviceProfileExists: true,
         available: false,
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Ask'));
+      await tester.tap(find.text('Internal'));
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.text('Move current data'),
-      );
+      await tester.tap(find.text('Move current data'));
       await tester.pumpAndSettle();
-      expect(storage.calls.last, 'no:true:false');
+      expect(storage.calls.last, 'no:false:false');
       await tester.tap(find.text('Use existing'));
       await tester.pumpAndSettle();
-      expect(storage.calls.last, 'ask:false:true');
+      expect(storage.calls.last, 'no:false:true');
     },
   );
 }

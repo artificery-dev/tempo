@@ -8,6 +8,7 @@ import '../storage/places.dart';
 import 'device_services.dart';
 import 'fm_radio.dart';
 import 'library.dart';
+import 'cadence_playback.dart';
 import 'playback.dart';
 import 'serialized_playback.dart';
 import 'readings.dart';
@@ -19,10 +20,14 @@ import 'volume.dart';
 import 'time_zone.dart';
 import 'data_storage.dart';
 export 'data_storage.dart';
+import 'card_maintenance.dart';
+export 'card_maintenance.dart';
 
 export 'device_services.dart';
 export 'fm_radio.dart';
 export 'library.dart';
+export 'cadence_library.dart';
+export 'cadence_media_library.dart';
 export 'playback.dart';
 export 'serialized_playback.dart';
 export 'readings.dart';
@@ -57,6 +62,8 @@ class PlayerServices {
     this.readSettings,
     this.writeSettings,
     this.dataStorage,
+    this.cardMaintenance,
+    this.resolveLibraryPath,
     this.fmRadio,
     this.timeZone,
     this.radios,
@@ -68,6 +75,8 @@ class PlayerServices {
   final Future<Map<String, Object?>> Function()? readSettings;
   final Future<void> Function(Map<String, Object?>)? writeSettings;
   final DataStorageController? dataStorage;
+  final CardMaintenanceController? cardMaintenance;
+  final Future<String> Function(TrackSummary)? resolveLibraryPath;
 
   /// The services as the machine reports them.
   ///
@@ -76,11 +85,14 @@ class PlayerServices {
   /// open a database in or play sound from.
   factory PlayerServices.device({
     Places? initialPlaces,
+    LibraryService? library,
+    Future<String> Function(TrackSummary)? resolveLibraryPath,
     Future<Map<String, Object?>> Function(Map<String, Object?>)? mediaTransport,
     Future<void> Function()? closeMediaTransport,
     Future<Map<String, Object?>> Function()? readSettings,
     Future<void> Function(Map<String, Object?>)? writeSettings,
     DataStorageController? dataStorage,
+    CardMaintenanceController? cardMaintenance,
     ValueListenable<BatteryReading>? battery,
     ValueListenable<StorageReading>? storage,
   }) {
@@ -96,6 +108,8 @@ class PlayerServices {
       readSettings: readSettings,
       writeSettings: writeSettings,
       dataStorage: dataStorage,
+      cardMaintenance: cardMaintenance,
+      resolveLibraryPath: resolveLibraryPath,
       battery: battery ?? DeviceBattery(),
       wifi: radios?.wifi ?? DeviceWifi(),
       bluetooth: radios?.bluetooth ?? DeviceBluetooth(),
@@ -109,26 +123,36 @@ class PlayerServices {
       fmRadio: underTest ? null : DeviceFmRadio(),
       timeZone: underTest ? null : DeviceTimeZone(),
       applets: AppletStore(places.value),
-      library: underTest
+      library:
+          library ??
+          (underTest
+              ? null
+              : MediaLibrary.open(
+                  // Beside the applets' state, in the player's own storage.
+                  databasePath: '${places.value.data}/library.db',
+                  transport: mediaTransport,
+                  daemonScheduled: mediaTransport != null,
+                  closeTransport: closeMediaTransport,
+                  roots: () =>
+                      deviceRoots(home: home, card: deviceStorage.value),
+                  sectionRoots: (section) => collectionRoots(
+                    home: home,
+                    card: deviceStorage.value,
+                    section: section,
+                  ),
+                  locations: () => [home, ?deviceStorage.value.path],
+                  storage: deviceStorage,
+                  autoScan: firstScanAfter,
+                  recheck: recheckAfter,
+                )),
+      playback: underTest
           ? null
-          : MediaLibrary.open(
-              // Beside the applets' state, in the player's own storage.
-              databasePath: '${places.value.data}/library.db',
-              transport: mediaTransport,
-              daemonScheduled: mediaTransport != null,
-              closeTransport: closeMediaTransport,
-              roots: () => deviceRoots(home: home, card: deviceStorage.value),
-              sectionRoots: (section) => collectionRoots(
-                home: home,
-                card: deviceStorage.value,
-                section: section,
-              ),
-              locations: () => [home, ?deviceStorage.value.path],
-              storage: deviceStorage,
-              autoScan: firstScanAfter,
-              recheck: recheckAfter,
+          : resolveLibraryPath == null
+          ? devicePlayback(volume: volume)
+          : CadencePlayback(
+              devicePlayback(volume: volume),
+              resolvePath: resolveLibraryPath,
             ),
-      playback: underTest ? null : devicePlayback(volume: volume),
     );
   }
 

@@ -9,6 +9,7 @@ import 'bluetooth.dart';
 import 'radio_distribution.dart';
 import 'plymouth.dart';
 import 'daemon_deploy.dart';
+import 'cadence.dart';
 import 'system_runtime.dart';
 import 'rootfs_container.dart';
 
@@ -153,6 +154,8 @@ class RootfsImage {
     final verifiedDaemon = await verifyDaemonBundle(
       repo.path('build/os/daemon/arm/bundle'),
     );
+    final cadenceBundle = repo.path('build/os/cadence/arm/bundle');
+    final cadenceFiles = await verifyCadenceBundle(cadenceBundle);
     final runtime = artifacts.os('runtime');
     final runtimeFiles = await verifySystemRuntime(runtime);
     final radio = artifacts.os('bluetooth');
@@ -248,6 +251,15 @@ class RootfsImage {
     }
     await install(manifestFile.path, 'usr/local/lib/tempod/manifest.json');
     link('usr/local/sbin/tempod', '../lib/tempod/bin/tempod');
+    remove('usr/local/lib/cadenced');
+    for (final relative in [...cadenceFiles.keys, 'manifest.json']) {
+      await install(
+        p.join(cadenceBundle, relative),
+        'usr/local/lib/cadenced/$relative',
+        mode: relative.startsWith('bin/') ? '755' : '644',
+      );
+    }
+    link('usr/local/sbin/cadenced', '../lib/cadenced/bin/cadenced');
     final units = repo.path('daemon/systemd');
     for (final name in [
       'tempod.service',

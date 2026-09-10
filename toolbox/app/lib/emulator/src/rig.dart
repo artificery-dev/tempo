@@ -220,7 +220,7 @@ class Rig extends ChangeNotifier {
         },
       ),
       home: _home,
-      data: _profilePaths?.data,
+      data: '$_home/.local/share/tempo',
       config: _profilePaths?.config,
     );
   }
@@ -244,7 +244,9 @@ class Rig extends ChangeNotifier {
   File? _bridgeDestination;
   String? _databasePath() {
     final mounted = places.value.fileSystem as MountedFileSystem;
-    final at = mounted.resolve('${places.value.data}/library.db');
+    final at = mounted.resolve(
+      '${_profilePaths?.data ?? places.value.data}/library.db',
+    );
     if (at.fs is LocalFileSystem) return at.path;
     // SQLite needs an actual host path. Import/export a session-local native
     // database instead of pretending a virtual /mnt/sd path is on the host.
@@ -252,7 +254,9 @@ class Rig extends ChangeNotifier {
       'tempo-emulator-db-',
     );
     _libraryBridge = temp;
-    _bridgeDestination = mounted.file('${places.value.data}/library.db');
+    _bridgeDestination = mounted.file(
+      '${_profilePaths?.data ?? places.value.data}/library.db',
+    );
     final target = temp.childFile('library.db');
     if (_bridgeDestination!.existsSync()) {
       _copyDatabase(_bridgeDestination!, target);

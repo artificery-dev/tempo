@@ -9,16 +9,35 @@ void main() {
   setUp(() async {
     root = await Directory.systemTemp.createTemp('tempo-profile-access-');
     paths = TempoProfilePaths(
-      data: '${root.path}/.tempo',
+      data: '${root.path}/.cadence',
       config: '${root.path}/.config/tempo',
     );
     Directory(paths.data).createSync(recursive: true);
     Directory(paths.config).createSync(recursive: true);
-    File('${paths.data}/library.db').writeAsStringSync('database');
+    File('${paths.data}/library.sqlite').writeAsStringSync('database');
     Directory('${root.path}/Music').createSync();
     File('${root.path}/Music/song.mp3').writeAsStringSync('media');
   });
   tearDown(() => root.delete(recursive: true));
+  test(
+    'new XDG ancestors are accessible without changing the home owner',
+    () async {
+      Directory('${root.path}/.config').deleteSync(recursive: true);
+      final owned = <String>[];
+      await ensureProfileAccess(
+        paths,
+        'tempo',
+        command: (name, args) async {
+          if (name == 'chown') owned.addAll(args.skip(args.indexOf('--') + 1));
+          return ProcessResult(1, 0, '', '');
+        },
+      );
+      expect(owned, contains('${root.path}/.config'));
+      expect(owned, contains(paths.config));
+      expect(owned, isNot(contains(root.path)));
+      expect(Directory(paths.config).existsSync(), isTrue);
+    },
+  );
   test(
     'changes only profile inventory and verifies access as frontend',
     () async {
