@@ -1,6 +1,5 @@
 # Local planning scratchpad
 /TASKS*
-!/TASKS.md
 .env*
 !.env.example
 !.env.device.example

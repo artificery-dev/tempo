@@ -1,0 +1,337 @@
+# Tempo CI: check the workspace, build the Toolbox for Linux and the tempod
+# ARM bundle, and publish them as a release from a tag.
+#
+# The runners are container-only (no docker socket, unprivileged), so every
+# job runs inside an image. The check and build jobs run inside the toolchain
+# image from platform/toolchain/Containerfile, which this workflow builds with
+# kaniko and pushes to this Forgejo instance's container registry the first
+# time a given platform/toolchain/digest.sh value is seen; later runs find the
+# tag and skip straight to using it. Inside that image TEMPO_TOOLCHAIN=1 makes
+# the build tool run its container steps directly.
+#
+# Pushing that image needs package write access, which Forgejo does not give
+# the workflow token. The supported way is an Authorized Integration: the
+# workflow requests a short-lived JWT (enable-openid-connect) and the registry
+# accepts it as a Basic-auth password. One-time setup by the integration's
+# owner:
+#   1. User settings > Authorized Integrations > Add authorized integration
+#      > Forgejo Actions (Local): select this repository, workflow file
+#      `ci.yml`, git reference empty (every branch and tag builds), access
+#      "All (public, private, and limited)" with every permission "No access"
+#      except package = "Read and write".
+#   2. Store the audience it shows (not secret) as the repository variable
+#      TEMPO_REGISTRY_AUDIENCE.
+# Alternatively the CI_FORGEJO_REGISTRY_USERNAME / CI_FORGEJO_REGISTRY_TOKEN
+# secrets (an access token with package scope) take precedence when set.
+#
+# main, develop and ci all run the whole pipeline. Releases come only from
+# tags: a `v*` tag publishes as itself and must sit on main and match the
+# version in config.yaml; the `ci-test` tag publishes a disposable prerelease
+# and must sit on the ci branch. Move `ci-test` and push it again to exercise
+# the release path; delete the release and the tag once it has proved itself.
+#
+# The firmware image (.y2-firmware) is not built here: its rootfs needs
+# rootful Podman with binfmt, which these runners do not have. It remains a
+# local `toolbox dev build`.
+name: CI
+
+"on":
+  push:
+    branches: [main, develop, ci]
+    tags: ['v*', 'ci-test']
+  workflow_dispatch:
+
+enable-openid-connect: true
+
+env:
+  TOOLCHAIN_IMAGE: tempo-toolchain
+  # The Dart the toolchain image carries for the Toolbox's own tests; it runs
+  # the build tool too, so no SDK has to be provisioned before it.
+  DART: /opt/toolbox-test/dart-sdk/bin/dart
+
+jobs:
+  toolchain:
+    name: Resolve toolchain image
+    runs-on: linux-amd64-container
+    timeout-minutes: 10
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      exists: ${{ steps.resolve.outputs.exists }}
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compute image tag and look it up in the registry
+        id: resolve
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          : "${GITHUB_SERVER_URL:?set by the instance}"
+          : "${GITHUB_REPOSITORY:?}"
+          registry=$(printf %s "$GITHUB_SERVER_URL" | sed 's#^https\?://##')
+          owner=$(printf %s "${GITHUB_REPOSITORY%%/*}" | tr 'A-Z' 'a-z')
+          digest=$(sh platform/toolchain/digest.sh)
+          image="$registry/$owner/$TOOLCHAIN_IMAGE:$digest"
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -u "$REGISTRY_USERNAME:$REGISTRY_TOKEN" \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://$registry/v2/$owner/$TOOLCHAIN_IMAGE/manifests/$digest" || true)
+          if [ "$status" = 200 ]; then exists=true; else exists=false; fi
+          echo "Toolchain image $image (registry answered $status, exists=$exists)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+  toolchain-build:
+    name: Build and push toolchain image
+    needs: toolchain
+    if: needs.toolchain.outputs.exists != 'true'
+    runs-on: linux-amd64-container
+    timeout-minutes: 90
+    container:
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+    steps:
+      # kaniko's image has busybox (whose wget lacks TLS) but no git, curl or
+      # node. Credentials are therefore obtained by a curl docker action,
+      # which shares the job workspace, and kaniko clones the source itself
+      # through its git context, pinned to the exact commit.
+      - name: Obtain registry credentials
+        uses: docker://docker.io/curlimages/curl:8.22.0
+        env:
+          IMAGE: ${{ needs.toolchain.outputs.image }}
+          AUDIENCE: ${{ vars.TEMPO_REGISTRY_AUDIENCE }}
+          REGISTRY_USERNAME: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        with:
+          entrypoint: /bin/sh
+          args: >-
+            -eu -c '
+            registry=${IMAGE%%/*}; path=${IMAGE#*/}; path=${path%%:*};
+            if [ -n "$REGISTRY_TOKEN" ]; then
+              user=$REGISTRY_USERNAME; pass=$REGISTRY_TOKEN; how="the CI_FORGEJO_REGISTRY_* secrets";
+            elif [ -n "$AUDIENCE" ]; then
+              : "${ACTIONS_ID_TOKEN_REQUEST_URL:?enable-openid-connect did not provide an ID token endpoint}";
+              pass=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | sed -n "s/.*\"value\":\"\([^\"]*\)\".*/\1/p");
+              [ -n "$pass" ] || { echo "::error::No JWT for audience $AUDIENCE; check the Authorized Integration restricts to this repository, ci.yml and this event"; exit 1; };
+              user=$ACTOR; how="an Authorized Integration JWT (audience $AUDIENCE)";
+            else
+              echo "::error::No registry credentials: set the TEMPO_REGISTRY_AUDIENCE variable to an Authorized Integration with package write capability, or the CI_FORGEJO_REGISTRY_USERNAME / CI_FORGEJO_REGISTRY_TOKEN secrets."; exit 1;
+            fi;
+            status=$(curl -sS -o /dev/null -w "%{http_code}" -u "$user:$pass" "https://$registry/v2/token?service=container_registry&scope=repository:$path:pull,push");
+            [ "$status" = 200 ] || { echo "::error::Registry $registry refused push credentials from $how (HTTP $status)"; exit 1; };
+            echo "Registry $registry accepted push credentials from $how";
+            printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "$registry" "$(printf "%s:%s" "$user" "$pass" | base64 | tr -d "\n")" > "$GITHUB_WORKSPACE/.registry-auth.json"
+            '
+      - name: Build platform/toolchain/Containerfile with kaniko and push
+        env:
+          IMAGE: ${{ needs.toolchain.outputs.image }}
+          GIT_USERNAME: ${{ github.actor }}
+          GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p /kaniko/.docker
+          mv "$GITHUB_WORKSPACE/.registry-auth.json" /kaniko/.docker/config.json
+          context="git://${GITHUB_SERVER_URL#*://}/${GITHUB_REPOSITORY}.git#${GITHUB_REF}#${GITHUB_SHA}"
+          echo "Building $IMAGE from $context"
+          /kaniko/executor \
+            --context "$context" \
+            --dockerfile platform/toolchain/Containerfile \
+            --destination "$IMAGE" \
+            --custom-platform linux/amd64 \
+            --snapshot-mode redo \
+            --compressed-caching=false
+
+  check:
+    name: Analyze and test
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+    runs-on: linux-amd64-container
+    timeout-minutes: 90
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Restore the pinned Flutter SDKs
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Provision the pinned Flutter SDKs
+        run: sh .forgejo/sdks.sh
+      - name: Resolve the build tool
+        run: cd toolbox/cli && "$DART" pub get
+      - name: Resolve the workspace
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get
+      - name: Analyze
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze
+      - name: Test
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test
+
+  build:
+    name: Build Toolbox and daemon
+    # After check, not beside it: the amd64 runners share one host.
+    needs: [toolchain, toolchain-build, check]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.check.result == 'success'
+    runs-on: linux-amd64-container
+    timeout-minutes: 120
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+          # Recovery is built into the Toolbox; its kernel is the submodule.
+          submodules: recursive
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Determine package version
+        run: |
+          set -eu
+          base=$(sed -n 's/^version: *//p' config.yaml | head -1)
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              version=${GITHUB_REF#refs/tags/v}
+              if [ "$version" != "$base" ]; then
+                echo "::error::Tag v$version does not match config.yaml version $base"
+                exit 1
+              fi
+              ;;
+            *)
+              version="$base~git$(date -u +%Y%m%d).$(printf %.7s "$GITHUB_SHA")"
+              ;;
+          esac
+          echo "TEMPO_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Packaging version $version"
+      - name: Restore the pinned Flutter SDKs
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Restore Recovery
+        # The build tool rebuilds Recovery only when its inputs changed, from
+        # a content-hash stamp; the cache just carries the last outputs.
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/recovery
+          key: recovery-${{ hashFiles('platform/recovery/**', 'platform/kernel/config/y2.config', '.gitmodules') }}
+      - name: Provision the pinned Flutter SDKs
+        run: sh .forgejo/sdks.sh
+      - name: Resolve the build tool and the workspace
+        run: |
+          cd toolbox/cli
+          "$DART" pub get
+          "$DART" run bin/toolbox.dart dev workspace get
+      - name: Build the tempod ARM bundle
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev daemon build --target arm
+      - name: Fetch the pinned cadenced release
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
+      - name: Build the Toolbox for Linux
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev toolbox build linux
+      - name: Package
+        run: |
+          set -eu
+          mkdir -p build/dist
+          gui=$(ls -d build/toolbox/flutter/linux/*/release/bundle | head -1)
+          stage=$(mktemp -d)
+          mkdir -p "$stage/tempo-toolbox"
+          cp -a build/toolbox/cli "$stage/tempo-toolbox/cli"
+          cp -a "$gui" "$stage/tempo-toolbox/gui"
+          tar -C "$stage" -czf "build/dist/tempo-toolbox-${TEMPO_VERSION}-linux-x64.tar.gz" tempo-toolbox
+          mkdir -p "$stage/tempod"
+          cp -a build/os/daemon/arm/bundle/. "$stage/tempod/"
+          tar -C "$stage" -czf "build/dist/tempod-${TEMPO_VERSION}-linux-armhf.tar.gz" tempod
+          (cd build/dist && sha256sum *.tar.gz > SHA256SUMS)
+          ls -la build/dist
+      - name: Save packages
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: tempo-packages
+          path: |
+            build/dist/*.tar.gz
+            build/dist/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [check, build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: linux-amd64-container
+    timeout-minutes: 15
+    env:
+      # A version tag releases as itself and must sit on main; `ci-test`
+      # publishes a prerelease, replaced on every run, and must sit on ci.
+      PRERELEASE: ${{ github.ref_name == 'ci-test' && 'true' || 'false' }}
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require the tag on its branch
+        run: |
+          set -eu
+          case "$GITHUB_REF_NAME" in
+            ci-test) branch=ci ;;
+            v*) branch=main ;;
+            *) echo "::error::Not a release tag: $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+          git fetch --quiet origin "$branch"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on $branch"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on $branch"
+      - name: Collect packages
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: tempo-packages
+          path: release
+      - name: Create release with packages attached
+        uses: https://data.forgejo.org/actions/forgejo-release@98265452477dafb3f0f27ba9c462c90b18cb44fd # v2.13.4
+        with:
+          direction: upload
+          url: ${{ github.server_url }}
+          repo: ${{ github.repository }}
+          tag: ${{ github.ref_name }}
+          sha: ${{ github.sha }}
+          prerelease: ${{ env.PRERELEASE }}
+          override: ${{ env.PRERELEASE }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-dir: release
+          release-notes: >-
+            Tempo ${{ github.ref_name }} (${{ github.sha }}): the Toolbox for
+            Linux x64 and the tempod bundle for the Y2 (armhf). The firmware
+            image is built locally with `toolbox dev build`.

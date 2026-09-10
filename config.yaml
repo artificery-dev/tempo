@@ -5,6 +5,11 @@
 # keys in config.local.yaml, which is gitignored and deep-merged over this one.
 # See config.local.example.yaml, and run `just secrets hash` once you have.
 
+# Tempo's release version: the Toolbox, the daemon and the firmware ship
+# together under it. A `v<version>` tag on main must match it (CI refuses
+# otherwise); builds from any other commit carry `<version>~git<date>.<sha>`.
+version: 0.9.0
+
 device:
   # Hostname, and the name written into /etc/hosts.
   hostname: tempo
