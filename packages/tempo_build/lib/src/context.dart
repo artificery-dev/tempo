@@ -263,6 +263,14 @@ class Toolchain {
   Toolchain(this.repository, this.runner);
   final Repository repository;
   final CommandRunner runner;
+
+  /// Whether build steps run directly instead of through `podman run`.
+  /// TEMPO_TOOLCHAIN is set inside the toolchain image (and by CI, whose jobs
+  /// already run in it). Tests describing the host view pin this to false.
+  static bool get insideContainer =>
+      _insideContainer ?? Platform.environment['TEMPO_TOOLCHAIN'] != null;
+  static set insideContainer(bool? value) => _insideContainer = value;
+  static bool? _insideContainer;
   Future<int> build(List<String> arguments) => runner.run('podman', [
     'build',
     ...arguments,
@@ -279,7 +287,7 @@ class Toolchain {
     Iterable<String> readOnlyPaths = const [],
     bool check = true,
   }) async {
-    if (Platform.environment['TEMPO_TOOLCHAIN'] != null)
+    if (insideContainer)
       return runner.run(
         arguments.first,
         arguments.skip(1).toList(),

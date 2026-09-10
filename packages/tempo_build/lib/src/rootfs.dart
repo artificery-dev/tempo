@@ -380,7 +380,7 @@ Future<int> _rootfsCommand(
   if (['stage', 'shell'].contains(action) && !File(image.image).existsSync())
     throw BuildFailure('Missing rootfs image: ${image.image}');
   if (Platform.environment['TEMPO_ROOTFS_HOST'] != '1' &&
-      Platform.environment['TEMPO_TOOLCHAIN'] != '1') {
+      !Toolchain.insideContainer) {
     if (await image.mounted()) {
       throw BuildFailure(
         'Rootfs image is mounted on the host; close its owner before container use',

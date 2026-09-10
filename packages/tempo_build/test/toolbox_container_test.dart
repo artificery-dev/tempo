@@ -31,6 +31,10 @@ class RecordingRunner extends CommandRunner {
 }
 
 void main() {
+  // These describe the host's view of the toolchain, even when the suite
+  // itself runs inside the container (as in CI).
+  setUpAll(() => Toolchain.insideContainer = false);
+  tearDownAll(() => Toolchain.insideContainer = null);
   late Directory temporary;
   late Repository repo;
   setUp(() {
