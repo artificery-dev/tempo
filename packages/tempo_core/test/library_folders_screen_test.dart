@@ -1,6 +1,4 @@
 import 'dart:io';
-import 'package:cadence_media/cadence_media.dart'
-    show MediaClient, MediaDatabase;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tempo_core/tempo_core.dart';
@@ -15,7 +13,7 @@ void main() {
     final root = Directory.systemTemp.createTempSync('tempo-folder-picker');
     Directory('${root.path}/Custom').createSync();
     final library = MediaLibrary.over(
-      Future.value(MediaClient.direct(MediaDatabase(NativeDatabase.memory()))),
+      hostMediaService(MediaDatabase(NativeDatabase.memory())),
       roots: () => [],
       sectionRoots: (section) => [],
       locations: () => [root.path],

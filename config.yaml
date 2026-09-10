@@ -345,6 +345,15 @@ firmware:
   # binaries, carried through Git LFS. Relative to the root.
   stock_rom: platform/firmware/stock
 
+cadence:
+  # The Cadence daemon ships as a release of its public repository; Tempo
+  # installs the armhf bundle tarball from this release. The tarball must
+  # match bundle_sha256 and the bundle's own manifest must verify. Move
+  # release and bundle_sha256 together when adopting a newer cadenced.
+  repository: https://git.artificery.dev/artificery/cadence
+  release: v0.9.0
+  bundle_sha256: c1369399e8b85cac8f646f8bd315bf48d9bdf44c7910369d1803d9f2714e465c
+
 daemon:
   # Independent host compiler; never changes the app/engine pairing.
   dart_version: 3.13.2

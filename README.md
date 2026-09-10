@@ -101,8 +101,9 @@ the pinned Flutter SDKs and Git LFS client; FVM is not required. SDKs live in
 
 Linux Toolbox GUI/CLI builds, native Rust builds, and browser tests run inside
 Podman. Toolbox can copy a pinned Linux SDK cache or fetch its pinned SDK in
-the container. Bootstrap resolves package dependencies using the host's Git/SSH
-credentials, including access to the private Cadence repository.
+the container. Bootstrap resolves package dependencies with the host's Git; the Cadence
+client and media packages come from the public Cadence repository, and the
+firmware build downloads the pinned `cadenced` release bundle.
 
 Rootfs build, stage and shell use privileged rootful Linux Podman with
 sudo/root access. The container supplies debootstrap, QEMU and filesystem tools.

@@ -77,10 +77,13 @@ An isolated source archive was built; the Cadence checkout was not modified.
   `bundle/bin/cadenced` and ARM SQLite asset with `dart build cli`.
 - The toolchain container now pins Rust **1.92.0** and builds `cadence-probe`
   for `armv7-unknown-linux-gnueabihf` with the GNU ARM linker.
-- `tempo dev cadence build` builds the bundle and records source revision and
-  file hashes. Rootfs staging verifies those hashes and ARM ELF headers before
-  installing it. The local source archive is an integration input pending
-  publication of the Cadence source repository.
+- Cadence is public at <https://git.artificery.dev/artificery/cadence> and its
+  CI publishes `cadenced-<version>-linux-armhf.tar.gz` bundles on releases.
+  `tempo dev cadence fetch` installs the release named in `config.yaml`
+  (`cadence.release`, pinned by `cadence.bundle_sha256`) and verifies the
+  bundle's manifest hashes and ARM ELF headers; rootfs staging verifies them
+  again before installing. `cadence_client` and `cadence_media` are git
+  dependencies on that repository (`packages/client`, `packages/media`).
 - ARM probe dependencies are `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`, and
   `ld-linux-armhf.so.3`. The supervisor sets `CADENCE_PROBE_PATH` to the bundle.
 

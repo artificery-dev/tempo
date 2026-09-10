@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
@@ -7,110 +8,184 @@ import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
 
-/// Build the Cadence-owned source tree with the same pinned Dart as tempod.
-/// Source is explicit while Cadence's public repository is being prepared.
+/// Bytes from a URL. Tests substitute a fake; the build uses [httpFetch].
+typedef Fetch = Future<List<int>> Function(Uri uri);
+
+/// The Cadence daemon ships as a release of its public repository. Tempo
+/// installs the armhf bundle tarball from the configured release, verified
+/// against the pinned tarball checksum and then the bundle's own manifest.
+class CadenceRelease {
+  CadenceRelease({
+    required this.repository,
+    required this.tag,
+    required this.bundleSha256,
+  });
+
+  factory CadenceRelease.fromConfig(BuildConfig config) {
+    final repository = Uri.tryParse(config.string('cadence.repository'));
+    if (repository == null ||
+        !repository.isScheme('https') ||
+        repository.pathSegments.where((s) => s.isNotEmpty).length != 2) {
+      throw BuildFailure(
+        'cadence.repository must be an https URL of the form '
+        'https://host/owner/name',
+      );
+    }
+    final sha = config.string('cadence.bundle_sha256').toLowerCase();
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(sha)) {
+      throw BuildFailure('cadence.bundle_sha256 must be a SHA-256 hex digest');
+    }
+    return CadenceRelease(
+      repository: repository,
+      tag: config.string('cadence.release'),
+      bundleSha256: sha,
+    );
+  }
+
+  final Uri repository;
+  final String tag;
+  final String bundleSha256;
+
+  /// The Forgejo/Gitea release endpoint for [tag].
+  Uri get api {
+    final segments = repository.pathSegments.where((s) => s.isNotEmpty);
+    return repository.replace(
+      pathSegments: [
+        'api',
+        'v1',
+        'repos',
+        ...segments,
+        'releases',
+        'tags',
+        tag,
+      ],
+    );
+  }
+}
+
+/// The armhf bundle asset of a release document, as (name, download URL).
+(String, Uri) cadenceArmhfAsset(Object? release) {
+  if (release is! Map || release['assets'] is! List) {
+    throw BuildFailure('Cadence release document has no assets');
+  }
+  final matches = <(String, Uri)>[];
+  for (final asset in release['assets'] as List) {
+    if (asset is! Map) continue;
+    final name = asset['name'];
+    final url = asset['browser_download_url'];
+    if (name is! String || url is! String) continue;
+    if (RegExp(r'^cadenced-[^/]+-linux-armhf\.tar\.gz$').hasMatch(name)) {
+      final uri = Uri.tryParse(url);
+      if (uri == null || !uri.isScheme('https')) {
+        throw BuildFailure('Cadence asset $name has no https download URL');
+      }
+      matches.add((name, uri));
+    }
+  }
+  if (matches.length != 1) {
+    throw BuildFailure(
+      'Expected exactly one cadenced armhf bundle in the release, '
+      'found ${matches.length}',
+    );
+  }
+  return matches.single;
+}
+
+Future<List<int>> httpFetch(Uri uri) async {
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(uri);
+    request.followRedirects = true;
+    final response = await request.close();
+    if (response.statusCode != 200) {
+      await response.drain<void>();
+      throw BuildFailure('GET $uri failed: HTTP ${response.statusCode}');
+    }
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in response) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  } finally {
+    client.close(force: true);
+  }
+}
+
+/// Install the configured Cadence release's armhf bundle under
+/// build/os/cadence/arm/bundle, where rootfs staging expects it.
 Future<int> cadenceCommand(
   Repository repo,
   BuildConfig config,
   CommandRunner runner,
-  List<String> args,
-) async {
-  if (args.length != 1 || args.single != 'build') {
-    throw BuildFailure('Expected cadence build', 2);
+  List<String> args, {
+  Fetch fetch = httpFetch,
+}) async {
+  if (args.length != 1 || args.single != 'fetch') {
+    throw BuildFailure('Expected cadence fetch', 2);
   }
-  final source = p.absolute(
-    Platform.environment['TEMPO_CADENCE_SOURCE'] ??
-        repo.path('third_party/cadence'),
-  );
-  final provenance = File(p.join(source, 'TEMPO_UPSTREAM_REVISION'));
-  if (!provenance.existsSync() ||
-      !RegExp(
-        r'^[a-f0-9]{40}$',
-      ).hasMatch(provenance.readAsStringSync().trim())) {
+  await fetchCadenceBundle(repo, config, runner, fetch: fetch);
+  return 0;
+}
+
+Future<String> fetchCadenceBundle(
+  Repository repo,
+  BuildConfig config,
+  CommandRunner runner, {
+  Fetch fetch = httpFetch,
+}) async {
+  final release = CadenceRelease.fromConfig(config);
+  final document = jsonDecode(utf8.decode(await fetch(release.api)));
+  final (name, url) = cadenceArmhfAsset(document);
+  final archive = File(repo.path('build/os/cadence/armhf/$name'));
+  Future<String> digestOf(File file) async =>
+      (await sha256.bind(file.openRead()).first).toString();
+  if (!archive.existsSync() ||
+      await digestOf(archive) != release.bundleSha256) {
+    archive.parent.createSync(recursive: true);
+    await archive.writeAsBytes(await fetch(url), flush: true);
+  }
+  final digest = await digestOf(archive);
+  if (digest != release.bundleSha256) {
     throw BuildFailure(
-      'Cadence source requires TEMPO_UPSTREAM_REVISION containing its exact commit. '
-      'Set TEMPO_CADENCE_SOURCE to the pinned source archive directory.',
+      'Cadence bundle $name does not match cadence.bundle_sha256 '
+      '(expected ${release.bundleSha256}, got $digest). Pin the checksum '
+      'of the release you intend to ship.',
     );
   }
-  final revision = provenance.readAsStringSync().trim();
-  final dart = Platform.environment['TEMPO_DAEMON_DART'] ??
-      (await FlutterSdk.discover(config, runner,
-        version: config.get('daemon.toolchain_version', fallback: '3.47.2').toString(),
-      )).dart;
-  final version = config
-      .get('daemon.dart_version', fallback: '3.13.2')
-      .toString();
-  final actual = await runner.capture(dart, ['--version']);
-  if (!'${actual.stdout}${actual.stderr}'.contains(
-    'Dart SDK version: $version ',
-  )) {
-    throw BuildFailure('Cadence requires Dart $version');
-  }
-  await runner.run(dart, [
-    'pub',
-    'get',
-    '--enforce-lockfile',
-  ], workingDirectory: source);
-  final output = repo.path('build/os/cadence/arm');
-  await runner.run(dart, [
-    'build',
-    'cli',
-    '--target',
-    'daemon/bin/cadenced.dart',
-    '--target-os',
-    'linux',
-    '--target-arch',
-    'arm',
-    '--output',
-    output,
-  ], workingDirectory: source);
-  await Toolchain(repo, runner).run(
-    [
-      'cargo',
-      'build',
-      '--release',
-      '--locked',
-      '--target',
-      'armv7-unknown-linux-gnueabihf',
-      '-p',
-      'cadence-probe',
-    ],
-    workingDirectory: source,
-    environment: {
-      'CARGO_TARGET_DIR': repo.path('build/cadence-rust'),
-      'CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER':
-          'arm-linux-gnueabihf-gcc',
-      'CC_armv7_unknown_linux_gnueabihf': 'arm-linux-gnueabihf-gcc',
-    },
-    readOnlyPaths: p.isWithin(repo.root, source) ? [] : [source],
-  );
-  final bundle = p.join(output, 'bundle');
-  await File(
-    repo.path(
-      'build/cadence-rust/armv7-unknown-linux-gnueabihf/release/libcadence_probe.so',
-    ),
-  ).copy(p.join(bundle, 'lib/libcadence_probe.so'));
-  await File(p.join(source, 'LICENSE')).copy(p.join(bundle, 'LICENSE'));
-  final hashes = <String, String>{};
-  for (final file in Directory(
+  final bundle = repo.path('build/os/cadence/arm/bundle');
+  final directory = Directory(bundle);
+  if (directory.existsSync()) directory.deleteSync(recursive: true);
+  directory.createSync(recursive: true);
+  // The tarball carries one top-level cadenced/ directory.
+  await runner.run('tar', [
+    '-xzf',
+    archive.path,
+    '--strip-components=1',
+    '-C',
     bundle,
-  ).listSync(recursive: true).whereType<File>()) {
-    if (p.basename(file.path) == 'manifest.json') continue;
-    hashes[p.relative(file.path, from: bundle)] =
-        (await sha256.bind(file.openRead()).first).toString();
+  ]);
+  if (!File(p.join(bundle, 'manifest.json')).existsSync()) {
+    throw BuildFailure(
+      'Cadence bundle $name has no top-level cadenced/manifest.json',
+    );
   }
-  File(p.join(bundle, 'manifest.json')).writeAsStringSync(
-    '${const JsonEncoder.withIndent('  ').convert({'sourceCommit': revision, 'dart': version, 'target': 'arm', 'files': hashes})}\n',
-  );
   await verifyCadenceBundle(bundle);
-  stdout.writeln('Cadence bundle: $bundle ($revision)');
-  return 0;
+  final manifest = jsonDecode(
+    File(p.join(bundle, 'manifest.json')).readAsStringSync(),
+  );
+  stdout.writeln(
+    'Cadence bundle: $bundle (${release.tag}, '
+    '${(manifest as Map)['sourceCommit']})',
+  );
+  return bundle;
 }
 
 Future<Map<String, String>> verifyCadenceBundle(String directory) async {
   final manifest = File(p.join(directory, 'manifest.json'));
   if (!manifest.existsSync())
-    throw BuildFailure('Build Cadence before staging rootfs');
+    throw BuildFailure(
+      'Fetch Cadence (toolbox dev cadence fetch) before staging rootfs',
+    );
   final document = jsonDecode(manifest.readAsStringSync());
   if (document is! Map ||
       document['target'] != 'arm' ||
@@ -140,31 +215,39 @@ Future<Map<String, String>> verifyCadenceBundle(String directory) async {
     }
     files[relative] = entry.value as String;
   }
-  for (final path in [
+  for (final required in [
     'bin/cadenced',
-    'lib/libcadence_probe.so',
     'lib/libsqlite3.so',
+    'lib/libcadence_probe.so',
+    'LICENSE',
   ]) {
-    if (!files.containsKey(path))
-      throw BuildFailure('Incomplete Cadence bundle: $path');
-    final handle = File(p.join(directory, path)).openSync();
-    final header = handle.readSync(20);
-    handle.closeSync();
-    if (header.length != 20 ||
-        header[0] != 127 ||
-        header[1] != 69 ||
-        header[2] != 76 ||
-        header[3] != 70 ||
-        header[4] != 1 ||
-        header[5] != 1 ||
-        header[18] != 40 ||
-        header[19] != 0) {
-      throw BuildFailure(
-        'Cadence artifact is not ARM32 little-endian ELF: $path',
-      );
+    if (!files.containsKey(required)) {
+      throw BuildFailure('Cadence bundle is missing $required');
     }
   }
-  if (!files.containsKey('LICENSE'))
-    throw BuildFailure('Cadence license missing');
+  for (final relative in files.keys) {
+    if (!relative.startsWith('bin/') && !relative.endsWith('.so')) continue;
+    final header = File(p.join(directory, relative)).openSync();
+    try {
+      final bytes = header.readSync(20);
+      // ELF, 32-bit, little-endian, e_machine ARM (0x28).
+      if (bytes.length < 20 ||
+          bytes[0] != 0x7f ||
+          bytes[1] != 0x45 ||
+          bytes[2] != 0x4c ||
+          bytes[3] != 0x46 ||
+          bytes[4] != 1 ||
+          bytes[5] != 1 ||
+          bytes[18] != 0x28 ||
+          bytes[19] != 0) {
+        throw BuildFailure('Cadence bundle $relative is not a 32-bit ARM ELF');
+      }
+    } finally {
+      header.closeSync();
+    }
+  }
+  if (!File(p.join(directory, 'LICENSE')).readAsStringSync().contains('MIT')) {
+    throw BuildFailure('Cadence bundle LICENSE must be the MIT license');
+  }
   return files;
 }

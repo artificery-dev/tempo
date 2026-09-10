@@ -13,7 +13,6 @@ environment:
 
 workspace:
   - app
-  - packages/cadence_client
   - assets
   - daemon
   - packages/daemon_client

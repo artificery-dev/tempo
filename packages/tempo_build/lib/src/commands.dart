@@ -28,7 +28,7 @@ const developerHelp = """toolbox dev [--repo PATH] <area> <action> [arguments]
   build (complete firmware, including the installer .y2-firmware)
   app build [--release] | deploy [--release] [--dry-run] | attach | clean
   app flutter-pi build|test|engine|rev|clean
-  cadence build
+  cadence fetch (the configured cadenced release's armhf bundle)
   daemon build [--target host|arm] [--dart-only] | deploy [--dry-run] | test|check|clean
   emulator run [Flutter run arguments] | mcp | clean
   workspace get|analyze|test|format

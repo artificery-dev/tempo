@@ -12,7 +12,10 @@ environment:
 
 dependencies:
   cadence_client:
-    path: ../cadence_client
+    git:
+      url: https://git.artificery.dev/artificery/cadence.git
+      path: packages/client
+      ref: main
   tempo_assets:
     path: ../../assets
   player_api:
@@ -25,6 +28,9 @@ dependencies:
   # the device's slot, a folder on a desktop, and one made up in memory -
   # so the player is handed the abstraction rather than a path.
   file: ^7.0.1
+  # The emulator hosts Cadence's media service in process over drift's
+  # native connection; the player itself talks to cadenced instead.
+  drift: ^2.34.0
   # Explicit IANA clock conversion, independent of the VM's cached local zone.
   timezone: ^0.11.1
   # Path arithmetic on the player's own namespace, which is posix whatever
@@ -36,16 +42,16 @@ dependencies:
   image: ^4.5.0
   # The library: Cadence's media foundation - the typed libraries over
   # files, the scanner and the extractors, and the service that owns the
-  # database - consumed from Cadence's own repo so the two players share one
+  # database - consumed from Cadence's public repo so the two players share one
   # implementation (and one protocol, for the day they talk to each other).
   # Pure Dart over dart:ffi (drift on the system libsqlite3), so it runs
   # whole under flutter-pi. Pinned by the lock to a commit of develop;
   # `fvm dart pub upgrade cadence_media` moves it.
   cadence_media:
     git:
-      url: ssh://git@pi-cluster-00.neon-bramble.ts.net/artificer/cadence.git
+      url: https://git.artificery.dev/artificery/cadence.git
       path: packages/media
-      ref: develop
+      ref: main
   # The player: libmpv over dart:ffi, audio only - no media_kit_video, no
   # platform plugin, so it too runs whole under flutter-pi with the
   # system's libmpv (rootfs.packages.audio has libmpv2).
@@ -61,8 +67,6 @@ dependencies:
 dev_dependencies:
   tempod:
     path: ../../daemon
-  # Tests host the media service in memory: drift's own connection.
-  drift: ^2.34.0
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter

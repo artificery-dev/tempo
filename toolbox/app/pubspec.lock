@@ -52,17 +52,19 @@ packages:
   cadence_client:
     dependency: transitive
     description:
-      path: "../../packages/cadence_client"
-      relative: true
-    source: path
+      path: "packages/client"
+      ref: main
+      resolved-ref: "77ff7df7a1f1b462accce025b47958255613be5a"
+      url: "https://git.artificery.dev/artificery/cadence.git"
+    source: git
     version: "1.0.0"
   cadence_media:
     dependency: transitive
     description:
       path: "packages/media"
-      ref: develop
-      resolved-ref: ea737670d2548afc547fb2acb2e1fd9efea32c32
-      url: "ssh://git@pi-cluster-00.neon-bramble.ts.net/artificer/cadence.git"
+      ref: main
+      resolved-ref: "77ff7df7a1f1b462accce025b47958255613be5a"
+      url: "https://git.artificery.dev/artificery/cadence.git"
     source: git
     version: "0.1.0"
   characters:
@@ -1194,14 +1196,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.7.0"
-  watcher:
-    dependency: transitive
-    description:
-      name: watcher
-      sha256: "1398c9f081a753f9226febe8900fce8f7d0a67163334e1c94a2438339d79d635"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.2.1"
   web:
     dependency: transitive
     description:

@@ -1,7 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cadence_media/cadence_media.dart';
+// Cadence's media package re-exports package:file; the host's own
+// dart:io files are the ones this library touches directly.
+import 'package:cadence_media/cadence_media.dart'
+    hide Directory, File, FileSystemEntity, Link;
+import 'package:drift/native.dart';
+import 'package:file/local.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
@@ -10,7 +15,8 @@ import 'readings.dart';
 export 'package:cadence_media/cadence_media.dart'
     show
         ArtworkPolicy,
-        IdentityHash,
+        ExtractorBuilder,
+        MediaDatabase,
         ScanPolicy,
         ScanState,
         ScanStatus,
@@ -23,7 +29,7 @@ enum LibrarySection {
   recordings('Recordings', 'mic', LibraryType.music),
   audiobooks('Audiobooks', 'book-audio', LibraryType.books),
   shows('Shows', 'tv', LibraryType.shows),
-  movies('Movies', 'film', LibraryType.videos);
+  movies('Movies', 'film', LibraryType.movies);
 
   const LibrarySection(this.label, this.icon, this.type);
   final String label;
@@ -151,25 +157,20 @@ typedef LibraryRoots = List<String> Function();
 
 /// The library over Cadence's media service.
 ///
-/// The service runs in its own isolate ([MediaServer.spawn]) and owns the
-/// database; this end speaks to it through a [MediaClient] and keeps the
-/// shelf - the track list - in memory for the screens. One "Music"
-/// library is made on first run and every scan claims whatever [roots]
-/// answers that exists: the card's Music folder, the player's own.
+/// The service is hosted in this process ([_host]) and owns the database;
+/// this end speaks to it through a [MediaClient] and keeps the shelf - the
+/// track list - in memory for the screens. One "Music" library is made on
+/// first run and every scan claims whatever [roots] answers that exists:
+/// the card's Music folder, the player's own. The player itself no longer
+/// uses this: it browses through cadenced (see [CadenceMediaLibrary]); the
+/// emulator and tests keep the in-process library.
 ///
-/// Scans run under [playerPolicy] by default - sampled hashes over a
-/// quarter megabyte of each end, and the pictures deferred - which is
-/// what a card of a hundred gigabytes on a Cortex-A7 can afford: with the
-/// covers decoded during the scan it indexed a file every two seconds;
-/// without, twelve a second. The pictures are made afterwards by the
-/// service's artwork queue, at low priority, the rows on screen first.
+/// Scans run under [playerPolicy] by default, with the pictures deferred:
+/// the covers are made afterwards by the service's artwork queue, the rows
+/// on screen first.
 class MediaLibrary implements CollectionLibrary {
   /// The player's scan budget.
-  static const playerPolicy = ScanPolicy(
-    identity: IdentityHash.sampled,
-    artwork: ArtworkPolicy.deferred,
-    hashSpan: 256 * 1024,
-  );
+  static const playerPolicy = ScanPolicy(artwork: ArtworkPolicy.deferred);
 
   /// Opens the database at [databasePath] (null: in memory) and comes
   /// up. [roots] says where to look; [storage] - the card - is watched,
@@ -194,7 +195,7 @@ class MediaLibrary implements CollectionLibrary {
     LibraryRoots? locations,
   }) : this.over(
          transport == null
-             ? _spawn(databasePath, policy)
+             ? _host(databasePath, policy)
              : Future.value(MediaClient(transport, onClose: closeTransport)),
          roots: roots,
          daemonScheduled: daemonScheduled,
@@ -224,14 +225,13 @@ class MediaLibrary implements CollectionLibrary {
     if (!daemonScheduled) _storage?.addListener(_storageMoved);
   }
 
-  static Future<MediaClient> _spawn(String? path, ScanPolicy policy) {
+  static Future<MediaClient> _host(String? path, ScanPolicy policy) async {
     if (path != null) Directory(p.dirname(path)).createSync(recursive: true);
-    // Last in line for the CPU, the service and every worker it spawns:
-    // the wheel on a small machine must not wait on a card being read.
-    return MediaServer.spawn(
-      databasePath: path,
+    return hostMediaService(
+      MediaDatabase(
+        path == null ? NativeDatabase.memory() : NativeDatabase(File(path)),
+      ),
       policy: policy,
-      lowPriority: true,
     );
   }
 
@@ -761,4 +761,47 @@ abstract final class MusicShelf {
     }
     return folded;
   }
+}
+
+/// Cadence's media service over [db] and the host's own files, in this
+/// process: what the emulator runs and what tests host in memory. Cadence
+/// reads and writes media through the file system injected for the zone it
+/// runs in, so the service is built and every request answered inside that
+/// zone. [buildExtractor] substitutes the tag readers (tests use a canned
+/// tier); deferred artwork is made afterwards by the queue.
+Future<MediaClient> hostMediaService(
+  MediaDatabase db, {
+  ScanPolicy policy = MediaLibrary.playerPolicy,
+  ExtractorBuilder buildExtractor = defaultMediaExtractor,
+}) async {
+  const fileSystem = LocalFileSystem();
+  return withMediaFileSystem(fileSystem, () {
+    final artwork = ArtworkQueue(
+      db,
+      buildExtractor: buildExtractor,
+      thumbnailSide: policy.thumbnailSide,
+    );
+    final coordinator = ScanCoordinator(
+      db,
+      scanner: LibraryScanner(
+        db,
+        buildExtractor: buildExtractor,
+        policy: policy,
+      ),
+      onFinished: (id) => unawaited(artwork.sweep(id)),
+    );
+    final service = MediaService(
+      db,
+      coordinator: coordinator,
+      artwork: artwork,
+    );
+    return MediaClient(
+      (request) => withMediaFileSystem(
+        fileSystem,
+        () async =>
+            (await service.handle(ServiceRequest.fromMap(request))).toMap(),
+      ),
+      onClose: () => withMediaFileSystem(fileSystem, service.close),
+    );
+  });
 }

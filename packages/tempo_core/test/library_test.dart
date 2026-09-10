@@ -1,6 +1,7 @@
 import 'dart:io';
 
-import 'package:cadence_media/cadence_media.dart';
+import 'package:cadence_media/cadence_media.dart'
+    hide Directory, File, FileSystemEntity, Link;
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,22 +35,11 @@ MediaExtractor _buildCanned() => const MediaExtractor([_CannedTier()]);
 /// The service in process over a memory database, with the canned tier
 /// on the calling isolate - the shape [MediaLibrary.over] takes. Hand in
 /// a [db] to open a second library over the same one.
-Future<MediaClient> _client([MediaDatabase? db]) async {
-  db ??= MediaDatabase(NativeDatabase.memory());
-  final coordinator = ScanCoordinator(
-    db,
-    scanner: LibraryScanner(
-      db,
-      buildExtractor: _buildCanned,
-      extractInIsolates: false,
-      policy: ScanPolicy.lean,
-    ),
-  );
-  return MediaClient.direct(
-    db,
-    service: MediaService(db, coordinator: coordinator),
-  );
-}
+Future<MediaClient> _client([MediaDatabase? db]) => hostMediaService(
+  db ?? MediaDatabase(NativeDatabase.memory()),
+  policy: ScanPolicy.lean,
+  buildExtractor: _buildCanned,
+);
 
 void main() {
   late Directory root;
