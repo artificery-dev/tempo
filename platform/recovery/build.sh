@@ -5,13 +5,9 @@ root=$(pwd)
 out="$root/build/recovery"
 kernel_source="$root/platform/kernel/linux"
 mkdir -p "$out/kernel"
-if [ ! -f "$out/kernel/.config" ]; then
-    if [ ! -f "$root/build/os/kernel/.config" ]; then
-        echo 'Build the normal kernel first (toolbox dev os kernel build).' >&2
-        exit 1
-    fi
-    cp "$root/build/os/kernel/.config" "$out/kernel/.config"
-fi
+# Generate a fresh base configuration from source, independent of a player build.
+make -C "$kernel_source" O="$out/kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+sed "s|@ROOT@|$root|g" "$root/platform/kernel/config/y2.config" >> "$out/kernel/.config"
 cc -Wall -Wextra -Werror -I"$kernel_source/drivers/power/supply" platform/recovery/test-charge-policy.c -o "$out/test-charge-policy"
 "$out/test-charge-policy"
 python3 platform/recovery/render-assets.py

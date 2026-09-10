@@ -1,4 +1,7 @@
-import 'dart:io' show stdout;
+import 'dart:convert';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 import 'package:file/local.dart';
 import 'dart:typed_data';
 
@@ -32,7 +35,113 @@ Uint8List recoveryImage(List<int> kernel, List<int> deviceTree) {
   );
 }
 
+/// Content provenance avoids timestamps surviving a checkout or copied build.
+class RecoveryBuildCache {
+  RecoveryBuildCache(this.root);
+  final String root;
+  static const outputs = [
+    'ramboot-DA.bin',
+    'payload.bin',
+    'preloader.bin',
+    'recovery.img',
+  ];
+  File get stamp => File(p.join(root, 'build/recovery/build-state.json'));
+
+  Future<Map<String, String>> hashes(Iterable<String> paths) async {
+    final result = <String, String>{};
+    for (final path in paths) {
+      final file = File(p.join(root, path));
+      result[path] = file.existsSync()
+          ? (await sha256.bind(file.openRead()).first).toString()
+          : 'missing';
+    }
+    return result;
+  }
+
+  Future<bool> ensure(
+    Map<String, Object?> inputs,
+    Future<void> Function() build,
+  ) async {
+    final paths = outputs.map((name) => 'build/recovery/$name').toList();
+    final before = await hashes(paths);
+    if (!before.containsValue('missing') && stamp.existsSync()) {
+      try {
+        final previous = jsonDecode(stamp.readAsStringSync()) as Map;
+        if (jsonEncode(previous['inputs']) == jsonEncode(inputs) &&
+            jsonEncode(previous['outputs']) == jsonEncode(before))
+          return false;
+      } on FormatException {
+        // An interrupted or obsolete stamp is a cache miss.
+      } on TypeError {
+        // Older formats cannot establish freshness.
+      }
+    }
+    if (stamp.existsSync()) stamp.deleteSync();
+    await build();
+    final after = await hashes(paths);
+    if (after.containsValue('missing')) {
+      throw BuildFailure('Recovery build did not produce all required images');
+    }
+    stamp.parent.createSync(recursive: true);
+    final temporary = File('${stamp.path}.tmp');
+    temporary.writeAsStringSync(
+      jsonEncode({'inputs': inputs, 'outputs': after}),
+    );
+    temporary.renameSync(stamp.path);
+    return true;
+  }
+}
+
+Future<void> ensureRecovery(Repository repo, CommandRunner runner) async {
+  final kernel = KernelSource(repo, runner);
+  final state = await kernel.sourceState();
+  if (state.dirty) {
+    throw BuildFailure(
+      'Kernel source has uncommitted changes. Commit them in '
+      'the kernel fork before building Recovery; no source was changed.',
+    );
+  }
+  final paths = <String>[
+    'platform/kernel/config/y2.config',
+    'platform/rootfs/initramfs/busybox/busybox-armv7l',
+    'platform/firmware/stock/rockbox-MTK_AllInOne_DA.bin',
+    'platform/firmware/stock/preloader_eastaeon82_wet_kk.bin',
+    'packages/tempo_build/lib/src/recovery.dart',
+    'packages/tempo_build/lib/src/kernel.dart',
+    'packages/tempo_build/lib/src/context.dart',
+  ];
+  for (final directory in [
+    'platform/recovery',
+    'platform/toolchain',
+    'assets/tempo/svg',
+  ]) {
+    for (final entry in Directory(
+      repo.path(directory),
+    ).listSync(recursive: true)) {
+      if (entry is File) paths.add(p.relative(entry.path, from: repo.root));
+    }
+  }
+  paths.sort();
+  final cache = RecoveryBuildCache(repo.root);
+  await cache.ensure(
+    {
+      'version': 1,
+      'kernel': (await kernel.git([
+        'rev-parse',
+        'HEAD',
+      ])).stdout.toString().trim(),
+      'files': await cache.hashes(paths),
+    },
+    () async {
+      stdout.writeln('Building missing or outdated Tempo Recovery…');
+      await buildRecovery(repo, runner);
+    },
+  );
+}
+
 Future<void> buildRecovery(Repository repo, CommandRunner runner) async {
+  final stamp = RecoveryBuildCache(repo.root).stamp;
+  if (stamp.existsSync()) stamp.deleteSync();
   await Toolchain(repo, runner).run(['sh', 'platform/recovery/build.sh']);
   const fs = LocalFileSystem();
   final output = repo.path('build/recovery');

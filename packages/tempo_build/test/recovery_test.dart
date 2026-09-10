@@ -1,10 +1,66 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:tempo_build/src/recovery.dart';
 import 'package:tempo_build/src/process.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'recovery cache rebuilds missing, changed and corrupted artifacts',
+    () async {
+      final root = Directory.systemTemp.createTempSync('tempo-recovery-test-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final cache = RecoveryBuildCache(root.path);
+      var builds = 0;
+      Future<void> build() async {
+        builds++;
+        for (final name in RecoveryBuildCache.outputs) {
+          File('${root.path}/build/recovery/$name')
+            ..createSync(recursive: true)
+            ..writeAsStringSync('build $builds');
+        }
+      }
+
+      expect(await cache.ensure({'kernel': 'a'}, build), isTrue);
+      expect(await cache.ensure({'kernel': 'a'}, build), isFalse);
+      expect(await cache.ensure({'kernel': 'b'}, build), isTrue);
+      File('${root.path}/build/recovery/payload.bin').deleteSync();
+      expect(await cache.ensure({'kernel': 'b'}, build), isTrue);
+      File(
+        '${root.path}/build/recovery/ramboot-DA.bin',
+      ).writeAsStringSync('corrupt');
+      expect(await cache.ensure({'kernel': 'b'}, build), isTrue);
+      cache.stamp.writeAsStringSync('{');
+      expect(await cache.ensure({'kernel': 'b'}, build), isTrue);
+      await expectLater(
+        cache.ensure({'kernel': 'c'}, () async {
+          throw StateError('failed');
+        }),
+        throwsStateError,
+      );
+      expect(cache.stamp.existsSync(), isFalse);
+      expect(await cache.ensure({'kernel': 'b'}, build), isTrue);
+      expect(await cache.ensure({'kernel': 'b'}, build), isFalse);
+    },
+  );
+
+  test(
+    'recovery input hashes detect content changes despite preserved times',
+    () async {
+      final root = Directory.systemTemp.createTempSync('tempo-recovery-input-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final input = File('${root.path}/input')..writeAsStringSync('old');
+      final modified = input.lastModifiedSync();
+      final cache = RecoveryBuildCache(root.path);
+      final before = await cache.hashes(['input']);
+      input
+        ..writeAsStringSync('new')
+        ..setLastModifiedSync(modified);
+      expect(await cache.hashes(['input']), isNot(before));
+    },
+  );
+
   test(
     'recovery has LK addresses, recovery wrapper and appended device tree',
     () {

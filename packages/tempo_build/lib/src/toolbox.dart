@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
+import 'recovery.dart';
 import 'toolbox_linux.dart';
 
 /// Normalize public Unix build products without following links out of a bundle.
@@ -269,6 +270,7 @@ Future<int> toolboxCommand(
       platform,
       ...args,
     ], workingDirectory: app);
+  await ensureRecovery(repo, runner);
   await cargo(['build', '--locked', '--release', '--bin', 'tempo-usb']);
   final helper = File(
     p.join(
