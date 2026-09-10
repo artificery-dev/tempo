@@ -768,18 +768,18 @@ packages:
     dependency: transitive
     description:
       name: tomeui
-      sha256: "025a7e893f0a6fa20b4260d66257002cbe23b8ccb84e80d96bd767d42687e6a2"
+      sha256: "8b674549bc13331c7edc5d5f9d0fc0b237d7222dabd22b6b318e2b022a336540"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.2"
+    version: "0.3.3"
   tomeui_clickwheel:
     dependency: transitive
     description:
       name: tomeui_clickwheel
-      sha256: "86391bf6d674b16429e65b662ae60745c456dc97b1fbd48f53f397e4e3ebd281"
+      sha256: "79eb2fe2b3d423855309e6db61cf10fc7e09320983ba1987def49f10c4518f83"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.2"
+    version: "0.3.3"
   toolbox_core:
     dependency: transitive
     description:
