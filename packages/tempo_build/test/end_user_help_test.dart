@@ -55,6 +55,8 @@ void main() {
         reason: 'Help must not create a backup named --help.',
       );
     },
-    timeout: const Timeout(Duration(seconds: 45)),
+    // Each invocation JIT-compiles the CLI; a CI host running several jobs
+    // takes a good deal longer over the eleven of them than a workstation.
+    timeout: const Timeout(Duration(minutes: 5)),
   );
 }
