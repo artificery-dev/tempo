@@ -201,6 +201,20 @@ abstract final class VolumeOsd {
       Osd.show((context) => VolumeToast(volume: volume));
 
   static void hide() => Osd.hide();
+
+  /// A level about to be asked for by a control that shows it already -
+  /// the slider in Settings - so the display need not repeat it. The
+  /// mixer's echo of that one level passes [VolumeToasts] in silence;
+  /// any other level, from anywhere, still shows.
+  static void quietly(int level) => _quietLevel = level.clamp(0, 100);
+
+  static int? _quietLevel;
+
+  static bool _consumeQuiet(int level) {
+    if (_quietLevel != level) return false;
+    _quietLevel = null;
+    return true;
+  }
 }
 
 /// Show volume changes regardless of whether they came from local controls
@@ -232,6 +246,7 @@ class _VolumeToastsState extends State<VolumeToasts> {
   }
 
   void _moved() {
+    if (VolumeOsd._consumeQuiet(widget.volume.value.level)) return;
     if (widget.awake) VolumeOsd.show(widget.volume);
   }
 

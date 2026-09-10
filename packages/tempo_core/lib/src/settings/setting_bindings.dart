@@ -426,6 +426,8 @@ abstract final class PlayerSettings {
       // A change the mixer itself reported is already true; sending it
       // back would be a loop.
       if (level is num && change.source != SettingSource.system) {
+        // The slider is the display here; the notice would only repeat it.
+        VolumeOsd.quietly(level.round());
         unawaited(services.volume.setLevel(level.round()));
       }
     },
