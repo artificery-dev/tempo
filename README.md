@@ -11,6 +11,12 @@ Y2's click wheel.
 It installs onto stock hardware with no case opening and no soldering. Normal
 installation preserves the MediaTek boot chain so it can be used for recovery.
 
+The media library is [Cadence](https://git.artificery.dev/artificery/cadence),
+a separate project whose daemon Tempo supervises on the device. The full
+documentation starts at [docs/index.md](docs/index.md), which routes readers
+by what they want to do: install Tempo on a Y2, build or change it, or port
+to the same hardware.
+
 ## Features
 
 - **Real Linux underneath.** Mainline Linux with a Debian armhf userland, so you
