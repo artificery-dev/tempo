@@ -1,13 +1,13 @@
 [Unit]
-Description=Initialize MT6582 radio calibration and power the modem off
+Description=Initialize MT6582 radio using vendor firmware and transient state
 After=local-fs.target
 Before=bluetooth.service tempod-native.service tempod.service mt6582-wifi-power.service wpa_supplicant.service wpa_supplicant-nl80211@wlan0.service
-ConditionPathExists=/opt/tempo-modem-diag/fixture/manifest.json
+AssertPathExists=/opt/tempo-modem-diag/modem_1_2g_n.img
 
 [Service]
 Type=oneshot
-ExecStart=/opt/tempo-modem-diag/bootstrap /opt/tempo-modem-diag/fixture
-ExecStopPost=/opt/tempo-modem-diag/bootstrap /opt/tempo-modem-diag/fixture --cleanup
+ExecStart=/opt/tempo-modem-diag/bootstrap /opt/tempo-modem-diag/modem_1_2g_n.img
+ExecStopPost=/opt/tempo-modem-diag/bootstrap /opt/tempo-modem-diag/modem_1_2g_n.img --cleanup
 TimeoutStartSec=40
 TimeoutStopSec=5
 RemainAfterExit=yes

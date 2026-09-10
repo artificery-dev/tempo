@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
 import 'bluetooth.dart';
+import 'radio_distribution.dart';
 import 'plymouth.dart';
 import 'daemon_deploy.dart';
 import 'system_runtime.dart';
@@ -155,6 +156,7 @@ class RootfsImage {
     final runtime = artifacts.os('runtime');
     final runtimeFiles = await verifySystemRuntime(runtime);
     final radio = artifacts.os('bluetooth');
+    rejectCapturedRadioBundle(Directory(radio));
     final manifest = File(p.join(radio, 'build-manifest.json'));
     if (!manifest.existsSync())
       throw BuildFailure(
@@ -184,14 +186,12 @@ class RootfsImage {
         mode: name == 'bootstrap' ? '755' : '644',
       );
     }
-    for (final file in Directory(
-      p.join(radio, 'fixture'),
-    ).listSync().whereType<File>())
-      await install(
-        file.path,
-        'opt/tempo-modem-diag/fixture/${p.basename(file.path)}',
-        mode: '600',
-      );
+    // Remove captures from an older staged rootfs as well as the old directory.
+    await runner.run('rm', ['-rf', at('opt/tempo-modem-diag/fixture')]);
+    await install(
+      p.join(radio, 'modem_1_2g_n.img'),
+      'opt/tempo-modem-diag/modem_1_2g_n.img',
+    );
     await install(
       p.join(radio, 'tempo-modem-bootstrap.service'),
       'etc/systemd/system/tempo-modem-bootstrap.service',

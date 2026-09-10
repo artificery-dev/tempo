@@ -23,7 +23,7 @@ import 'developer_help.dart';
 import 'bootstrap.dart';
 
 const developerHelp = """toolbox dev [--repo PATH] <area> <action> [arguments]
-  bootstrap [--config FILE] [--fixture DIRECTORY] [--build]
+  bootstrap [--config FILE] [--build]
   build (complete firmware, including the installer .y2-firmware)
   app build [--release] | deploy [--release] [--dry-run] | attach | clean
   app flutter-pi build|test|engine|rev|clean

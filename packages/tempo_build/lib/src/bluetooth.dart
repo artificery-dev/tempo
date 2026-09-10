@@ -4,7 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
-import 'modem_fixture.dart';
+import 'modem_protocol.dart';
 
 Future<int> bluetoothCommand(
   Repository repo,
@@ -15,13 +15,18 @@ Future<int> bluetoothCommand(
   if (args.isNotEmpty && (args.length != 1 || args.single != 'build'))
     throw BuildFailure('Expected os bluetooth build', 2);
   final source = repo.path('platform/bluetooth');
-  var fixture = config.string('rootfs.bluetooth_bootstrap_fixture');
-  if (!p.isAbsolute(fixture)) fixture = repo.path(fixture);
-  if (!File(p.join(fixture, 'manifest.json')).existsSync())
-    throw BuildFailure('Bluetooth calibration fixture is missing: $fixture');
-  await ModemFixture.load(fixture);
+  final firmware = repo.path('platform/firmware/stock/modem_1_2g_n.img');
+  if (!File(firmware).existsSync() ||
+      (await sha256.bind(File(firmware).openRead()).first).toString() !=
+          modemFirmwareHash) {
+    throw BuildFailure(
+      'Missing or changed Y2 vendor modem firmware: $firmware',
+    );
+  }
   final output = ArtifactPaths(repo).os('bluetooth');
-  Directory(p.join(output, 'fixture')).createSync(recursive: true);
+  Directory(output).createSync(recursive: true);
+  final retiredFixture = Directory(p.join(output, 'fixture'));
+  if (retiredFixture.existsSync()) retiredFixture.deleteSync(recursive: true);
   await Toolchain(repo, runner).run([
     'arm-linux-gnueabihf-gcc',
     '-shared',
@@ -48,8 +53,7 @@ Future<int> bluetoothCommand(
   if (retired.existsSync()) retired.deleteSync();
   for (final name in ['tempo-modem-bootstrap.service'])
     File(p.join(source, name)).copySync(p.join(output, name));
-  for (final name in ['manifest.json', 'firmware.bin', 'smem.bin', 'fs.bin'])
-    File(p.join(fixture, name)).copySync(p.join(output, 'fixture', name));
+  File(firmware).copySync(p.join(output, 'modem_1_2g_n.img'));
   final files =
       Directory(output)
           .listSync(recursive: true)

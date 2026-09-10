@@ -117,14 +117,13 @@ From a clean checkout, run the pure Dart CLI from its own package directory:
 ```sh
 cd toolbox/cli
 dart run bin/toolbox.dart dev bootstrap \
-  --config /absolute/path/to/config.local.yaml \
-  --fixture /absolute/path/to/mt6582-modem-bootstrap
+  --config /absolute/path/to/config.local.yaml
 cd ../..
 build/toolbox/cli/toolbox dev build
 ```
 
-The imports are optional when the local configuration and calibration fixture
-are already present. Existing inputs are preserved. Set an SSH public key or
+The import is optional when local configuration is already present. Existing
+configuration is preserved. Set an SSH public key or
 your own password in the configuration; do not use the example password.
 Bootstrap checks rootful Podman mounting and ARM execution, initializes
 submodules, hydrates required firmware blobs, resolves dependencies and compiles the CLI.
@@ -137,8 +136,9 @@ It rebuilds the configured rootfs image and does not access the device.
 `toolbox dev workspace analyze` and `toolbox dev workspace test` run the
 development checks. Individual component commands remain available.
 
-The Bluetooth build requires the device-specific calibration fixture configured
-in `config.yaml`; it is private input under `platform/firmware/local/`. Rootfs staging
+Bluetooth initialization uses the bundled stock modem firmware, generated
+protocol structures, and a temporary RAM filesystem. No device captures are
+required or included; see [radio initialization](docs/platform/radio-initialization.md). Rootfs staging
 requires a complete verified ARM daemon bundle, including its native libraries.
 `toolbox dev os rootfs stage` updates an existing image. Use `toolbox dev device`
 for running hardware and `toolbox dev emulator run` for the mocked emulator.

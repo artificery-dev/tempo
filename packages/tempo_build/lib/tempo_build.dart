@@ -9,7 +9,7 @@ export 'src/rootfs.dart' show RootfsImage;
 export 'src/plymouth.dart' show ElfDependencies, stagePlymouth;
 export 'src/splash.dart' show LogoImage, pngLogoBlock;
 export 'src/distribution.dart' show ScatterDocument, generateScatter;
-export 'src/modem_fixture.dart';
+export 'src/modem_protocol.dart';
 export 'src/daemon_deploy.dart'
     show
         VerifiedDaemonBundle,

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'modem_filesystem.dart';
 import 'package:tempo_build/tempo_build.dart';
 import 'modem_hardware.dart';
 
@@ -39,7 +41,7 @@ Future<void> main(List<String> arguments) async {
       cleanup = args.remove('--cleanup');
   if (args.contains('--help')) {
     stdout.writeln(
-      'bootstrap FIXTURE [--validate-only|--cleanup] [--output DIR] [--native-library FILE]',
+      'bootstrap FIRMWARE [--validate-only|--cleanup] [--output DIR] [--native-library FILE]',
     );
     return;
   }
@@ -66,7 +68,7 @@ Future<void> main(List<String> arguments) async {
       '${File(Platform.resolvedExecutable).parent.path}/mmio.so',
     );
     if (args.length != 1 || args.single.startsWith('--'))
-      throw const FormatException('Expected one fixture directory');
+      throw const FormatException('Expected one vendor modem firmware file');
     if (cleanup) {
       if (!await owned.exists()) return;
       library = DynamicLibrary.open(native);
@@ -80,8 +82,12 @@ Future<void> main(List<String> arguments) async {
       await owned.delete();
       return;
     }
-    final fixture = await ModemFixture.load(args.single);
-    modemLog('Validated fixture: ${fixture.exchanges.length} FS exchanges');
+    final firmware = await File(args.single).readAsBytes();
+    if (sha256.convert(firmware).toString() != modemFirmwareHash ||
+        firmware.length > modemRomSize) {
+      throw const FormatException('Unexpected Y2 vendor modem firmware');
+    }
+    modemLog('Validated vendor firmware; generated runtime and RAM filesystem');
     if (validate) return;
     library = DynamicLibrary.open(native);
     await checkBoard(library);
@@ -122,8 +128,8 @@ Future<void> main(List<String> arguments) async {
         modemLog('Normalizing unconfigured LK modem to OFF');
         await hw.powerOff();
       }
-      hw.initialize(fixture);
-      await hw.run(fixture, output);
+      hw.initialize(firmware);
+      await hw.run(ModemFileSystem(), output);
     } finally {
       hw.cleaning = true;
       await hw.powerOff();

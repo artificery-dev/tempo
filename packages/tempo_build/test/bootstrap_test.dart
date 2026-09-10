@@ -12,9 +12,7 @@ void main() {
     repo = Repository(temporary.path);
     Directory(repo.path('app')).createSync();
     File(repo.path('pubspec.yaml')).writeAsStringSync('name: fixture\n');
-    File(repo.path('config.yaml')).writeAsStringSync(
-      'user:\n  name: tempo\nrootfs:\n  bluetooth_bootstrap_fixture: private-radio\n',
-    );
+    File(repo.path('config.yaml')).writeAsStringSync('user:\n  name: tempo\n');
   });
   tearDown(() => temporary.deleteSync(recursive: true));
 
@@ -24,13 +22,11 @@ void main() {
       await expectLater(
         validateFirmwareInputs(repo, BuildConfig.load(repo)),
         throwsA(
-          isA<BuildFailure>()
-              .having(
-                (e) => e.message,
-                'credentials',
-                contains('user.ssh_keys'),
-              )
-              .having((e) => e.message, 'calibration', contains('--fixture')),
+          isA<BuildFailure>().having(
+            (e) => e.message,
+            'credentials',
+            contains('user.ssh_keys'),
+          ),
         ),
       );
     },

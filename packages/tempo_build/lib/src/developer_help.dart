@@ -2,10 +2,10 @@
 /// Entries describe the implemented parsers, including forwarded arguments.
 const developerCommands = <String, (String, String)>{
   'bootstrap': (
-    '[--config FILE] [--fixture DIRECTORY] [--build]',
+    '[--config FILE] [--build]',
     'Prepare a clean Linux x64 checkout for a complete firmware build.\n'
         'Provision submodules, firmware blobs, pinned SDKs, dependencies, toolchain and CLI.\n'
-        '--config imports local settings; --fixture imports private calibration; existing inputs are preserved.\n'
+        '--config imports local settings; existing inputs are preserved.\n'
         'Requires Dart, Git, Podman, rootful sudo access and private dependency credentials.\n'
         'From a clean checkout: cd toolbox/cli && dart run bin/toolbox.dart dev bootstrap\n'
         '--build also runs the complete firmware build after setup.',

@@ -2,11 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:crypto/crypto.dart';
 
 import 'bootstrap_sdk.dart';
 import 'context.dart';
-import 'modem_fixture.dart';
 import 'process.dart';
 import 'rootfs_container.dart';
 
@@ -56,7 +54,7 @@ Future<void> requireFirmwareHost(CommandRunner runner) async {
   }
 }
 
-/// Validate private inputs before long downloads or a destructive rootfs rebuild.
+/// Validate local credentials before downloads or a rootfs rebuild.
 Future<void> validateFirmwareInputs(Repository repo, BuildConfig config) async {
   final missing = <String>[];
   final password = config.get('user.password')?.toString() ?? '';
@@ -73,17 +71,6 @@ Future<void> validateFirmwareInputs(Repository repo, BuildConfig config) async {
       'or use an SSH public key with a locked password.',
     );
   }
-  final fixture = config.string('rootfs.bluetooth_bootstrap_fixture');
-  final location = p.isAbsolute(fixture) ? fixture : repo.path(fixture);
-  try {
-    await ModemFixture.load(location);
-  } on Object {
-    missing.add(
-      'Provide a valid modem calibration fixture at $location '
-      '(manifest.json, firmware.bin, smem.bin, fs.bin). '
-      'bootstrap --fixture DIRECTORY imports a local capture.',
-    );
-  }
   if (missing.isNotEmpty) {
     throw BuildFailure(
       'Firmware inputs need setup:\n${missing.map((s) => '  - $s').join('\n')}',
@@ -91,12 +78,11 @@ Future<void> validateFirmwareInputs(Repository repo, BuildConfig config) async {
   }
 }
 
-/// Explicit imports never replace machine configuration or calibration in place.
+/// Explicit imports never replace machine configuration in place.
 Future<void> importBootstrapInputs(
   Repository repo,
   CommandRunner runner, {
   String? configuration,
-  String? fixture,
 }) async {
   if (configuration != null) {
     final source = File(p.absolute(configuration));
@@ -112,49 +98,6 @@ Future<void> importBootstrapInputs(
     } else {
       // Preserve the user's original YAML and comments.
       await runner.run('install', ['-m', '600', source.path, destination.path]);
-    }
-  }
-  if (fixture != null) {
-    final source = p.absolute(fixture);
-    await ModemFixture.load(source);
-    final config = BuildConfig.load(repo, expandKeys: false);
-    final configured = config.string('rootfs.bluetooth_bootstrap_fixture');
-    final destination = p.isAbsolute(configured)
-        ? configured
-        : repo.path(configured);
-    const names = ['manifest.json', 'firmware.bin', 'smem.bin', 'fs.bin'];
-    if (Directory(destination).existsSync()) {
-      for (final name in names) {
-        final target = File(p.join(destination, name));
-        if (!target.existsSync() ||
-            (await sha256.bind(target.openRead()).first) !=
-                (await sha256
-                    .bind(File(p.join(source, name)).openRead())
-                    .first)) {
-          throw BuildFailure(
-            'Calibration already exists at $destination; bootstrap will not overwrite it.',
-          );
-        }
-      }
-    } else {
-      Directory(p.dirname(destination)).createSync(recursive: true);
-      final staging = Directory(
-        p.dirname(destination),
-      ).createTempSync('.fixture-');
-      try {
-        await runner.run('chmod', ['700', staging.path]);
-        for (final name in names) {
-          await runner.run('install', [
-            '-m',
-            '600',
-            p.join(source, name),
-            p.join(staging.path, name),
-          ]);
-        }
-        staging.renameSync(destination);
-      } finally {
-        if (staging.existsSync()) staging.deleteSync(recursive: true);
-      }
     }
   }
 }
@@ -178,7 +121,6 @@ Future<int> bootstrapCommand(
   }
 
   final configuration = option('--config');
-  final fixture = option('--fixture');
   final build = args.remove('--build');
   if (args.isNotEmpty)
     throw BuildFailure('Unexpected bootstrap arguments: ${args.join(' ')}', 2);
@@ -194,12 +136,7 @@ Future<int> bootstrapCommand(
     } on FileSystemException {
       throw BuildFailure('Bootstrap is already running in this checkout.', 73);
     }
-    await importBootstrapInputs(
-      repo,
-      runner,
-      configuration: configuration,
-      fixture: fixture,
-    );
+    await importBootstrapInputs(repo, runner, configuration: configuration);
     final config = BuildConfig.load(repo);
     await validateFirmwareInputs(repo, config);
     await runner.run('git', ['--version']);
