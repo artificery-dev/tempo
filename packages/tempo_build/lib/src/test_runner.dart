@@ -1,12 +1,13 @@
 import 'dart:convert';
-import 'dart:ffi';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
 
-/// Runs package:test directly, preserving the app's Flutter dependency lock.
-/// The isolated package configuration owns its SQLite JIT asset mapping.
+/// Runs package:test directly, preserving the app's Flutter dependency lock,
+/// from an isolated package configuration under the daemon's build output.
+/// Building the daemon as a CLI bundle first proves it still links as one.
 Future<int> runDaemonTests(
   Repository repo,
   CommandRunner runner,
@@ -48,30 +49,10 @@ Future<int> runDaemonTests(
     '--output',
     output,
   ], workingDirectory: repo.path('daemon'));
-  final library = Directory(p.join(output, 'bundle', 'lib'))
-      .listSync()
-      .whereType<File>()
-      .where((file) => p.basename(file.path).contains('sqlite3'))
-      .firstOrNull;
-  if (library == null)
-    throw BuildFailure('Daemon test build omitted SQLite native asset.');
   final isolated = Directory(p.join(output, '.dart_tool'))
     ..createSync(recursive: true);
   final packageConfig = File(p.join(isolated.path, 'package_config.json'))
     ..writeAsStringSync(jsonEncode(config));
-  File(p.join(isolated.path, 'native_assets.yaml')).writeAsStringSync(
-    jsonEncode({
-      'format-version': [1, 0, 0],
-      'native-assets': {
-        abi: {
-          'package:sqlite3/src/ffi/libsqlite3.g.dart': [
-            'absolute',
-            library.absolute.path,
-          ],
-        },
-      },
-    }),
-  );
   return runner.run(
     dart,
     [
