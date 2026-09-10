@@ -3,6 +3,7 @@ import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
 import '../panel_bar.dart';
 import '../services/services.dart';
 import '../appearance.dart';
+import '../scale.dart';
 
 /// Recovery does not create a player, open a library, or load settings.
 class DataStorageRecoveryApp extends StatelessWidget {
@@ -24,28 +25,144 @@ class DataStorageRecoveryApp extends StatelessWidget {
 
 /// Bounded content is essential on the physical panel: Dialog's generic
 /// content column otherwise grows beyond its route's scroll viewport.
-class DataStoragePrompt extends StatelessWidget {
+/// Where a freshly inserted card's library should live: on the card, or
+/// on the player.
+enum CardLibraryChoice { card, device }
+
+/// The question a first card insert asks, over the wheel the way Power is:
+/// two options on a [WheelRail], the center takes the lit one, and menu or
+/// back keeps the library on the device. Device settings never move; the
+/// choice is only about the media library's database and cache.
+class DataStoragePrompt extends StatefulWidget {
   const DataStoragePrompt({required this.controller, this.onDone, super.key});
   final DataStorageController controller;
   final VoidCallback? onDone;
   @override
+  State<DataStoragePrompt> createState() => _DataStoragePromptState();
+}
+
+class _DataStoragePromptState extends State<DataStoragePrompt> {
+  final WheelRailController _rail = WheelRailController();
+  static const _physics = WheelRailPhysics(weight: panelRailWeight);
+  CardLibraryChoice _choice = CardLibraryChoice.card;
+  bool _pending = false;
+  String? _error;
+
+  Future<void> _decide(CardLibraryChoice choice) async {
+    final controller = widget.controller;
+    final status = controller.value;
+    if (_pending || status.busy || status.restarting) return;
+    if (choice == CardLibraryChoice.card && !status.cardPresent) return;
+    setState(() {
+      _pending = true;
+      _error = null;
+    });
+    try {
+      if (choice == CardLibraryChoice.card) {
+        await controller.setPolicy(
+          DataStoragePolicy.yes,
+          adoptExisting: status.cardProfileExists,
+        );
+      } else {
+        await controller.setPolicy(DataStoragePolicy.no);
+      }
+      if (mounted) widget.onDone?.call();
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _pending = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final style = ThemeProvider.of(context).widgets.dialog.resolve();
-    final height =
-        (MediaQuery.sizeOf(context).height -
-                2 * style.margin -
-                style.padding.resolve(Directionality.of(context)).vertical -
-                style.gap)
-            .clamp(40.0, double.infinity);
-    return Dialog(
-      content: SizedBox(
-        height: height,
-        child: DataStorageChoices(
-          controller: controller,
-          startup: true,
-          onDone: onDone,
-        ),
-      ),
+    final theme = ThemeProvider.of(context);
+    final margin = theme.widgets.dialog
+        .resolve()
+        .padding
+        .resolve(Directionality.of(context))
+        .right;
+    return ValueListenableBuilder<DataStorageStatus>(
+      valueListenable: widget.controller,
+      builder: (context, status, _) {
+        final blocked = _pending || status.busy || status.restarting;
+        return InputCapture(
+          active: true,
+          debugLabel: 'DataStoragePrompt',
+          captures: const {
+            WheelInput.wheel,
+            WheelInput.select,
+            WheelInput.menu,
+            WheelInput.skip,
+          },
+          releaseOn: const {},
+          onCapture: (intent) {
+            if (blocked) return;
+            switch (intent) {
+              case JogIntent():
+                _rail.jog(intent);
+              case ActivateIntent():
+                _decide(_choice);
+              case MediaIntent(command: MediaCommand.previous):
+                _rail.step(-1);
+              case MediaIntent(command: MediaCommand.next):
+                _rail.step(1);
+              case WheelBackIntent() || WheelMenuIntent():
+                _decide(CardLibraryChoice.device);
+              default:
+                return;
+            }
+          },
+          child: Dialog(
+            title: const Text('SD Card Inserted'),
+            message: Text(
+              status.cardProfileExists
+                  ? 'This card already contains a media library. Use that '
+                        'one, or keep the library data on your device? No '
+                        'files will be moved either way.'
+                  : 'Keep your media library data on this card? It travels '
+                        'with the card, and device settings stay on the '
+                        'device. No media files will be moved.',
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_error ?? status.error case final error?) ...[
+                  Text(error, maxLines: 3, overflow: TextOverflow.ellipsis),
+                  SizedBox(height: theme.space.x2),
+                ],
+                if (status.restarting) ...[
+                  const Text('Restarting to change storage…'),
+                  SizedBox(height: theme.space.x2),
+                ] else if (!status.cardPresent) ...[
+                  const Text('The card was removed.'),
+                  SizedBox(height: theme.space.x2),
+                ],
+                WheelRail<CardLibraryChoice>(
+                  controller: _rail,
+                  value: _choice,
+                  onChanged: (choice) {
+                    if (!blocked) setState(() => _choice = choice);
+                  },
+                  physics: _physics.copyWith(give: margin),
+                  variant: SurfaceVariant.subtle,
+                  segments: const [
+                    SegmentOption(
+                      value: CardLibraryChoice.card,
+                      label: Text('Use card'),
+                    ),
+                    SegmentOption(
+                      value: CardLibraryChoice.device,
+                      label: Text('Use device'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -63,15 +180,8 @@ class DataStorageScreen extends StatelessWidget {
 
 /// Both surfaces use bootstrap-owned policy, never the ordinary Settings store.
 class DataStorageChoices extends StatefulWidget {
-  const DataStorageChoices({
-    required this.controller,
-    this.startup = false,
-    this.onDone,
-    super.key,
-  });
+  const DataStorageChoices({required this.controller, super.key});
   final DataStorageController? controller;
-  final bool startup;
-  final VoidCallback? onDone;
   @override
   State<DataStorageChoices> createState() => _DataStorageChoicesState();
 }
@@ -98,8 +208,7 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
     if (index == 0 && !controller.value.cardPresent) return;
     final status = controller.value;
     if (replaceExisting && !status.available) return;
-    if (!widget.startup &&
-        !confirmed &&
+    if (!confirmed &&
         !replaceExisting &&
         !adoptExisting &&
         ((index == 0 && !status.usingCard && status.cardProfileExists) ||
@@ -110,8 +219,7 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
       });
       return;
     }
-    if (!widget.startup &&
-        ((index == 0 && !status.usingCard) ||
+    if (((index == 0 && !status.usingCard) ||
             (index != 0 && status.usingCard)) &&
         !replaceExisting &&
         !adoptExisting &&
@@ -127,23 +235,11 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
       _error = null;
     });
     try {
-      if (!widget.startup) {
-        await controller.setPolicy(
-          DataStoragePolicy.values[index],
-          replaceExisting: replaceExisting,
-          adoptExisting: adoptExisting,
-        );
-      } else if (index == 0) {
-        await controller.setPolicy(
-          DataStoragePolicy.yes,
-          adoptExisting: status.cardProfileExists,
-        );
-      } else if (index == 1) {
-        await controller.setPolicy(DataStoragePolicy.no);
-      } else {
-        await controller.setPolicy(DataStoragePolicy.no);
-      }
-      if (mounted && widget.startup) widget.onDone?.call();
+      await controller.setPolicy(
+        DataStoragePolicy.values[index],
+        replaceExisting: replaceExisting,
+        adoptExisting: adoptExisting,
+      );
       if (mounted) {
         setState(() {
           _collision = null;
@@ -212,9 +308,7 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
           );
         }
         final blocked = _pending || status.busy || status.restarting;
-        final labels = widget.startup
-            ? ['Yes', 'No']
-            : ['Internal', 'External'];
+        const labels = ['Internal', 'External'];
         if (_confirmMove case final destination?) {
           void cancel() => setState(() {
             _confirmMove = null;
@@ -376,7 +470,7 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                   () => _selected = (_selected + amount) % labels.length,
                 );
               case ActivateIntent():
-                _choose(widget.startup ? _selected : 1 - _selected);
+                _choose(1 - _selected);
               case MediaIntent(command: MediaCommand.next):
                 setState(() => _selected = (_selected + 1) % labels.length);
               case MediaIntent(command: MediaCommand.previous):
@@ -385,24 +479,15 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                       (_selected + labels.length - 1) % labels.length,
                 );
               case WheelBackIntent() || WheelMenuIntent():
-                if (widget.startup) {
-                  _choose(1);
-                } else {
-                  Navigator.of(context).maybePop();
-                }
+                Navigator.of(context).maybePop();
               default:
                 break;
             }
           },
           child: _layout(
             [
-              if (widget.startup) const Text('Use SD card data?'),
               Text(
-                widget.startup
-                    ? status.cardProfileExists
-                          ? 'Use the saved media library on this card? Device settings stay internal.'
-                          : 'Store media library metadata on this card? Device settings stay internal.'
-                    : status.available
+                status.available
                     ? 'Tempo Data Location'
                     : 'Choose available storage',
               ),
@@ -412,11 +497,11 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                   maxLines: MediaQuery.sizeOf(context).width < 120 ? 2 : 3,
                   overflow: TextOverflow.ellipsis,
                 ),
-              if (!widget.startup && status.available)
+              if (status.available)
                 Text(
                   'Preferred: ${status.policy == DataStoragePolicy.no ? 'Internal' : 'External'}',
                 ),
-              if (!widget.startup && status.available)
+              if (status.available)
                 Text(
                   status.usingCard
                       ? 'Using external storage'
@@ -432,12 +517,9 @@ class _DataStorageChoicesState extends State<DataStorageChoices> {
                 _outlined(
                   i,
                   Button(
-                    onPressed:
-                        blocked ||
-                            ((widget.startup ? i == 0 : i == 1) &&
-                                !status.cardPresent)
+                    onPressed: blocked || (i == 1 && !status.cardPresent)
                         ? null
-                        : () => _choose(widget.startup ? i : 1 - i),
+                        : () => _choose(1 - i),
                     center: Text(labels[i]),
                   ),
                 ),

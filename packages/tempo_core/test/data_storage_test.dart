@@ -69,6 +69,7 @@ void main() {
     tester,
   ) async {
     final storage = FakeStorage(const DataStorageStatus(available: false));
+    final wheel = ClickWheelController();
     final services = PlayerServices(
       battery: ValueNotifier(const BatteryReading(percent: 50)),
       wifi: ValueNotifier(WifiReading.off),
@@ -87,24 +88,31 @@ void main() {
       TempoApp(
         settings: Settings(tree: playerSettingsTree),
         services: services,
+        wheel: wheel,
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Use SD card data?'), findsNothing);
+    expect(find.text('SD Card Inserted'), findsNothing);
     storage.value = const DataStorageStatus(
       cardPresent: true,
       cardProfileExists: true,
     );
     await tester.pumpAndSettle();
-    expect(find.text('Use SD card data?'), findsOneWidget);
-    await tester.tap(find.text('No'));
+    expect(find.text('SD Card Inserted'), findsOneWidget);
+    expect(
+      find.textContaining('already contains a media library'),
+      findsOneWidget,
+    );
+    wheel.jog(1);
+    await tester.pump();
+    wheel.press(WheelButton.select);
     await tester.pumpAndSettle();
     storage.value = const DataStorageStatus(
       cardPresent: true,
       cardProfileExists: true,
     );
     await tester.pumpAndSettle();
-    expect(find.text('Use SD card data?'), findsNothing);
+    expect(find.text('SD Card Inserted'), findsNothing);
     expect(storage.calls, ['no:false:false']);
     await tester.pumpWidget(const SizedBox());
     storage.value = const DataStorageStatus();
@@ -121,7 +129,7 @@ void main() {
       cardProfileExists: true,
     );
     await tester.pumpAndSettle();
-    expect(find.text('Use SD card data?'), findsNothing);
+    expect(find.text('SD Card Inserted'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     storage.value = const DataStorageStatus(
       policy: DataStoragePolicy.no,
@@ -136,7 +144,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Use SD card data?'), findsNothing);
+    expect(find.text('SD Card Inserted'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets('unavailable profile permits recovery to device', (tester) async {
@@ -156,7 +164,7 @@ void main() {
       TomeApp(
         home: ClickWheelInput(
           controller: wheel,
-          child: DataStorageChoices(controller: storage, startup: true),
+          child: DataStoragePrompt(controller: storage),
         ),
       ),
     );
@@ -171,7 +179,9 @@ void main() {
       restarting: true,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Yes'));
+    wheel.jog(-1);
+    await tester.pump();
+    wheel.press(WheelButton.select);
     await tester.pumpAndSettle();
     expect(storage.calls, ['no:false:false']);
   });
@@ -201,46 +211,69 @@ void main() {
       file.dispose();
     },
   );
-  Future<void> show(
-    WidgetTester tester,
-    FakeStorage storage, {
-    bool startup = false,
-    VoidCallback? done,
-  }) async {
+  Future<void> show(WidgetTester tester, FakeStorage storage) async {
     tester.view.physicalSize = const Size(480, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
-      TomeApp(
-        home: DataStorageChoices(
-          controller: storage,
-          startup: startup,
-          onDone: done,
-        ),
-      ),
+      TomeApp(home: DataStorageChoices(controller: storage)),
     );
     await tester.pumpAndSettle();
   }
 
+  /// The card prompt on the player's own screen, driven by the wheel.
+  Future<ClickWheelController> showPrompt(
+    WidgetTester tester,
+    FakeStorage storage, {
+    VoidCallback? done,
+  }) async {
+    tester.view.physicalSize = const Size(480, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final wheel = ClickWheelController();
+    await tester.pumpWidget(
+      TomeApp(
+        theme: UiScale.regular.theme(Brightness.dark),
+        home: ClickWheelInput(
+          controller: wheel,
+          child: DataStoragePrompt(controller: storage, onDone: done),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return wheel;
+  }
+
   for (final entry in {
-    'Yes': 'yes:false:true',
-    'No': 'no:false:false',
+    'Use card': (0, 'yes:false:true'),
+    'Use device': (1, 'no:false:false'),
   }.entries) {
-    testWidgets('startup ${entry.key} dispatches only its intended action', (
-      tester,
-    ) async {
-      final storage = FakeStorage();
-      var finished = false;
-      await show(tester, storage, startup: true, done: () => finished = true);
-      await tester.tap(find.text(entry.key));
-      await tester.pumpAndSettle();
-      expect(storage.calls, [entry.value]);
-      expect(finished, true);
-      if (entry.key == 'No') {
-        expect(storage.value.policy, DataStoragePolicy.no);
-      }
-    });
+    testWidgets(
+      'card prompt ${entry.key} dispatches only its intended action',
+      (tester) async {
+        final storage = FakeStorage();
+        var finished = false;
+        final wheel = await showPrompt(
+          tester,
+          storage,
+          done: () => finished = true,
+        );
+        expect(find.text('SD Card Inserted'), findsOneWidget);
+        expect(find.text(entry.key), findsOneWidget);
+        wheel.jog(entry.value.$1);
+        await tester.pump();
+        wheel.press(WheelButton.select);
+        await tester.pumpAndSettle();
+        expect(storage.calls, [entry.value.$2]);
+        expect(finished, true);
+        expect(tester.takeException(), isNull);
+        if (entry.value.$1 == 1) {
+          expect(storage.value.policy, DataStoragePolicy.no);
+        }
+      },
+    );
   }
   testWidgets(
     'external location requires confirmation and cancel keeps Internal',
@@ -267,11 +300,12 @@ void main() {
     },
   );
   testWidgets(
-    'missing card disables Yes and failure preserves startup dialog',
+    'missing card disables Use card and failure preserves the prompt',
     (tester) async {
       final storage = FakeStorage(const DataStorageStatus());
-      await show(tester, storage, startup: true);
-      await tester.tap(find.text('Yes'));
+      final wheel = await showPrompt(tester, storage);
+      wheel.press(WheelButton.select);
+      await tester.pumpAndSettle();
       expect(storage.calls, isEmpty);
       storage.value = const DataStorageStatus(
         cardPresent: true,
@@ -279,10 +313,11 @@ void main() {
       );
       storage.fail = true;
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Yes'));
+      wheel.press(WheelButton.select);
       await tester.pumpAndSettle();
       expect(find.textContaining('Card is read-only'), findsOneWidget);
-      expect(find.text('No'), findsOneWidget);
+      expect(find.text('Use device'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     },
   );
   testWidgets(
