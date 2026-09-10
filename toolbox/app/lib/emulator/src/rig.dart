@@ -39,9 +39,9 @@ class Rig extends ChangeNotifier {
   ValueNotifier<WifiReading> get wifi => radios.wifi;
   ValueNotifier<BluetoothReading> get bluetooth => radios.bluetooth;
 
-  /// A card in the slot to begin with: a player with no card is the
-  /// unusual state, and the rig should start where the hardware usually
-  /// is.
+  /// The slot, empty to begin with: putting a card in is the moment the
+  /// player asks where its library should live, and the rig starts on the
+  /// near side of that question so it can be watched happening.
   final storage = ValueNotifier(StorageReading.empty);
 
   /// The machine's filesystem: a made-up Linux tree with the real things
@@ -386,27 +386,30 @@ class Rig extends ChangeNotifier {
 
   // -- the card ------------------------------------------------------------
 
-  bool _cardInserted = true;
+  bool _cardInserted = false;
 
   bool get cardInserted => _cardInserted;
 
+  /// Putting a card in or taking it out: each is an event the player
+  /// sees, the way the hardware would report it.
   set cardInserted(bool inserted) {
     if (inserted == _cardInserted) return;
     _cardInserted = inserted;
     _publishCard();
   }
 
-  /// A host folder to begin with: a card whose contents are still there
-  /// tomorrow is the one worth putting music on, and the one the library
-  /// has anything to scan.
-  CardSource _cardSource = CardSource.hostFolder;
+  /// A made-up card to begin with: nothing on this machine's disk is
+  /// touched until a host folder is chosen on purpose.
+  CardSource _cardSource = CardSource.inMemory;
 
   CardSource get cardSource => _cardSource;
 
+  /// A different card, not a changed one: while a card is in the slot,
+  /// switching what stands behind it takes that card out and puts the
+  /// other in, so the player sees an eject and an insert.
   set cardSource(CardSource source) {
     if (source == _cardSource) return;
-    _cardSource = source;
-    _publishCard();
+    _swapCard(() => _cardSource = source);
   }
 
   late String _hostFolder;
@@ -415,7 +418,24 @@ class Rig extends ChangeNotifier {
 
   set hostFolder(String folder) {
     if (folder == _hostFolder) return;
-    _hostFolder = folder;
+    if (_cardSource == CardSource.hostFolder) {
+      _swapCard(() => _hostFolder = folder);
+    } else {
+      _hostFolder = folder;
+      notifyListeners();
+    }
+  }
+
+  void _swapCard(void Function() change) {
+    if (!_cardInserted) {
+      change();
+      notifyListeners();
+      return;
+    }
+    _cardInserted = false;
+    _publishCard();
+    change();
+    _cardInserted = true;
     _publishCard();
   }
 
@@ -451,31 +471,55 @@ class Rig extends ChangeNotifier {
           };
     // Mounting the card is a change to the machine, not just to a reading.
     places.value = _machine();
-    if (_storageInitialized) {
-      if (dataStorage.value.usingCard || !dataStorage.value.available) {
-        _cardRefresh = _cardRefresh.then((_) async {
-          if (_disposed) return;
-          try {
-            await dataStorage.beforeChange?.call();
-            await _restartProfile();
-          } catch (error) {
-            if (!_disposed) dataStorage.failure(error, unavailable: true);
-          }
-        });
-      } else {
-        final m = _storageManager();
-        dataStorage.publish(
-          TempoStorageDecision(
-            policy: m.readSelector(),
-            location: TempoStorageLocation.device,
-            activePaths: _profilePaths ?? m.devicePaths,
-            needsPrompt: false,
-            sdAvailable: _profileCardAvailable,
-          ),
-        );
-      }
-    }
+    if (_storageInitialized) _followCard();
     notifyListeners();
+  }
+
+  /// What a card arriving or leaving means for the profile. A profile on
+  /// the card, or none at all, restarts the player. With the player's own
+  /// profile active the card only changes what the player may ask - the
+  /// decision the device makes at boot, so a card holding a library under
+  /// a Yes policy is taken up, and any card under Ask is offered. That
+  /// last case is decided here and now, from the slot as it is at this
+  /// moment, so a swap reads as an eject and then an insert rather than
+  /// as one merged state.
+  void _followCard() {
+    if (dataStorage.value.usingCard || !dataStorage.value.available) {
+      _restartForCard();
+      return;
+    }
+    final m = _storageManager();
+    final policy = m.readSelector();
+    final card = _profileCardAvailable;
+    final cardProfile =
+        card &&
+        m.sdPaths != null &&
+        m.fs.directory(m.sdPaths!.data).existsSync();
+    if (policy == TempoStoragePolicy.yes && cardProfile) {
+      _restartForCard();
+      return;
+    }
+    dataStorage.publish(
+      TempoStorageDecision(
+        policy: policy,
+        location: TempoStorageLocation.device,
+        activePaths: _profilePaths ?? m.devicePaths,
+        needsPrompt: policy != TempoStoragePolicy.no && card,
+        sdAvailable: card,
+      ),
+    );
+  }
+
+  void _restartForCard() {
+    _cardRefresh = _cardRefresh.then((_) async {
+      if (_disposed) return;
+      try {
+        await dataStorage.beforeChange?.call();
+        await _restartProfile();
+      } catch (error) {
+        if (!_disposed) dataStorage.failure(error, unavailable: true);
+      }
+    });
   }
 
   /// Wait for mock card insertion/removal owner changes in tests or shutdown.

@@ -155,6 +155,52 @@ void main() {
     await tester.pumpAndSettle();
     expect(storage.calls, ['no:false:false']);
   });
+  testWidgets('a card taken out and put back is asked about again', (
+    tester,
+  ) async {
+    final storage = FakeStorage(const DataStorageStatus(available: false));
+    final wheel = ClickWheelController();
+    final services = PlayerServices(
+      battery: ValueNotifier(const BatteryReading(percent: 50)),
+      wifi: ValueNotifier(WifiReading.off),
+      bluetooth: ValueNotifier(BluetoothReading.off),
+      storage: ValueNotifier(const StorageReading()),
+      places: ValueNotifier(
+        Places(fileSystem: MemoryFileSystem(), home: '/home/tempo'),
+      ),
+      screen: ScreenSwitch(),
+      volume: VolumeSwitch(),
+      output: OutputSwitch(),
+      feedback: FeedbackSwitch(),
+      dataStorage: storage,
+    );
+    await tester.pumpWidget(
+      TempoApp(
+        settings: Settings(tree: playerSettingsTree),
+        services: services,
+        wheel: wheel,
+      ),
+    );
+    await tester.pumpAndSettle();
+    storage.value = const DataStorageStatus(cardPresent: true);
+    await tester.pumpAndSettle();
+    expect(find.text('SD Card Inserted'), findsOneWidget);
+    // Use card, on a card with no library yet: the policy becomes Yes.
+    wheel.press(WheelButton.select);
+    await tester.pumpAndSettle();
+    expect(find.text('SD Card Inserted'), findsNothing);
+    expect(storage.calls, ['yes:false:false']);
+    // Out, and back in: a card under Yes that still has no library asks.
+    storage.value = const DataStorageStatus(policy: DataStoragePolicy.yes);
+    await tester.pumpAndSettle();
+    storage.value = const DataStorageStatus(
+      policy: DataStoragePolicy.yes,
+      cardPresent: true,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('SD Card Inserted'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('wheel can decline startup and restart blocks changes', (
     tester,
   ) async {

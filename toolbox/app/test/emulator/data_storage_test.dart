@@ -28,6 +28,7 @@ void main() {
       final events = <String>[];
       final rig = Rig(libraryFactory: (path) => ClosingLibrary(path!, events));
       rig.cardSource = CardSource.inMemory;
+      rig.cardInserted = true;
       await rig.initializeStorage();
       final original = rig.services;
       final fs = rig.places.value.fileSystem;
@@ -48,28 +49,31 @@ void main() {
       expect(events, ['flush', 'detach', 'close']);
       expect(rig.places.value.home, '/home/tempo');
       expect(rig.places.value.sdCard, '/mnt/sd');
-      expect(rig.places.value.data, '/mnt/sd/.tempo');
-      expect(rig.places.value.config, '/mnt/sd/.tempo/config');
+      expect(rig.dataStorage.value.usingCard, isTrue);
+      expect(rig.places.value.config, '/home/tempo/.config/tempo');
       expect(
-        fs.file('/mnt/sd/.tempo/library.db').readAsStringSync(),
+        fs.file('/mnt/sd/.cadence/library.db').readAsStringSync(),
         'checkpointed',
       );
       expect(
-        fs.file('/mnt/sd/.tempo/config/settings.json').readAsStringSync(),
+        fs.file('/home/tempo/.config/tempo/settings.json').readAsStringSync(),
         'flushed',
       );
       expect(identical(rig.services, original), false);
       await rig.closeProfile();
+      // Pulling the card falls back to the device profile without making
+      // settings unavailable; putting it back under Yes takes it up again.
       rig.cardInserted = false;
       await rig.cardSettled;
-      expect(rig.dataStorage.value.available, false);
-      expect(rig.dataStorage.value.usingCard, true);
+      expect(rig.dataStorage.value.available, true);
+      expect(rig.dataStorage.value.usingCard, false);
       rig.cardInserted = true;
       await rig.cardSettled;
       expect(rig.dataStorage.value.available, true);
+      expect(rig.dataStorage.value.usingCard, true);
       expect(
         rig.places.value.fileSystem
-            .file('/mnt/sd/.tempo/library.db')
+            .file('/mnt/sd/.cadence/library.db')
             .readAsStringSync(),
         'checkpointed',
       );
@@ -77,38 +81,82 @@ void main() {
       rig.dispose();
     },
   );
+  test('a card arriving with the device profile active asks, and a swap ejects '
+      'then inserts', () async {
+    final rig = Rig();
+    await rig.initializeStorage();
+    expect(rig.cardInserted, isFalse);
+    expect(rig.cardSource, CardSource.inMemory);
+    expect(rig.dataStorage.value.available, isTrue);
+    expect(rig.dataStorage.value.cardPresent, isFalse);
+    expect(rig.dataStorage.value.promptAvailable, isFalse);
+    final generation = rig.profileGeneration;
+
+    final seen = <DataStorageStatus>[];
+    rig.dataStorage.addListener(() => seen.add(rig.dataStorage.value));
+    rig.cardInserted = true;
+    await rig.cardSettled;
+    expect(rig.dataStorage.value.cardPresent, isTrue);
+    expect(rig.dataStorage.value.promptAvailable, isTrue);
+    expect(rig.dataStorage.value.usingCard, isFalse);
+    expect(rig.dataStorage.value.available, isTrue);
+    expect(rig.profileGeneration, generation, reason: 'no restart to ask');
+
+    seen.clear();
+    rig.cardSource = CardSource.hostFolder;
+    await rig.cardSettled;
+    expect(seen.map((s) => s.cardPresent), [false, true]);
+    expect(rig.dataStorage.value.promptAvailable, isTrue);
+
+    seen.clear();
+    rig.cardInserted = false;
+    await rig.cardSettled;
+    expect(seen.map((s) => s.cardPresent), [false]);
+    expect(rig.dataStorage.value.promptAvailable, isFalse);
+    expect(rig.dataStorage.value.available, isTrue);
+    await rig.closeProfile();
+    rig.dispose();
+  });
   test('adopting existing memory card never overwrites its profile', () async {
     final rig = Rig();
     rig.cardSource = CardSource.inMemory;
+    rig.cardInserted = true;
     final fs = rig.places.value.fileSystem;
-    fs.directory('/mnt/sd/.tempo/config').createSync(recursive: true);
-    fs.file('/mnt/sd/.tempo/library.db').writeAsStringSync('existing');
+    fs.directory('/mnt/sd/.cadence').createSync(recursive: true);
+    fs.file('/mnt/sd/.cadence/library.db').writeAsStringSync('existing');
     await rig.initializeStorage();
     expect(rig.dataStorage.value.promptAvailable, true);
     expect(rig.dataStorage.value.cardProfileExists, true);
     rig.dataStorage.skipStartup();
     expect(rig.dataStorage.value.policy, DataStoragePolicy.ask);
     await rig.dataStorage.adoptCardForStartup();
-    expect(rig.places.value.data, '/mnt/sd/.tempo');
-    expect(fs.file('/mnt/sd/.tempo/library.db').readAsStringSync(), 'existing');
+    expect(rig.dataStorage.value.usingCard, isTrue);
+    expect(
+      fs.file('/mnt/sd/.cadence/library.db').readAsStringSync(),
+      'existing',
+    );
     await rig.closeProfile();
     rig.dispose();
   });
   test('existing destination requires reviewed collision choice', () async {
     final rig = Rig();
     rig.cardSource = CardSource.inMemory;
+    rig.cardInserted = true;
     await rig.initializeStorage();
     final fs = rig.places.value.fileSystem;
-    fs.directory('/mnt/sd/.tempo').createSync(recursive: true);
-    fs.file('/mnt/sd/.tempo/library.db').writeAsStringSync('existing');
+    fs.directory('/mnt/sd/.cadence').createSync(recursive: true);
+    fs.file('/mnt/sd/.cadence/library.db').writeAsStringSync('existing');
     await expectLater(
       rig.dataStorage.setPolicy(DataStoragePolicy.yes),
       throwsA(isA<TempoProfileConflict>()),
     );
     expect(rig.dataStorage.value.busy, false);
     expect(rig.dataStorage.value.available, true);
-    expect(rig.places.value.data, '/home/tempo/.tempo');
-    expect(fs.file('/mnt/sd/.tempo/library.db').readAsStringSync(), 'existing');
+    expect(rig.dataStorage.value.usingCard, isFalse);
+    expect(
+      fs.file('/mnt/sd/.cadence/library.db').readAsStringSync(),
+      'existing',
+    );
     await rig.closeProfile();
     rig.dispose();
   });
@@ -129,13 +177,15 @@ void main() {
           return NoLibrary();
         },
       );
+      rig.cardSource = CardSource.hostFolder;
       rig.hostFolder = card.path;
+      rig.cardInserted = true;
       await rig.initializeStorage();
       rig.services;
-      expect(opened.single, '${home.path}/.tempo/library.db');
+      expect(opened.single, '${home.path}/.cadence/library.db');
       await rig.dataStorage.setPolicy(DataStoragePolicy.yes);
       rig.services;
-      expect(opened.last, '${card.path}/.tempo/library.db');
+      expect(opened.last, '${card.path}/.cadence/library.db');
       expect(rig.places.value.home, '/home/tempo');
       await rig.closeProfile();
       rig.dispose();
@@ -143,10 +193,12 @@ void main() {
         homeFileSystem: const LocalFileSystem(),
         homeRoot: home.path,
       );
+      next.cardSource = CardSource.hostFolder;
       next.hostFolder = card.path;
+      next.cardInserted = true;
       await next.initializeStorage();
       expect(next.dataStorage.value.usingCard, true);
-      expect(next.places.value.config, '/mnt/sd/.tempo/config');
+      expect(next.places.value.config, '/home/tempo/.config/tempo');
       await next.closeProfile();
       next.dispose();
       temp.deleteSync(recursive: true);
@@ -168,9 +220,11 @@ void main() {
           .file('/home/tempo/selector.new')
           .renameSync('/home/tempo/selector');
       expect(a.file('/home/selector').readAsStringSync(), 'yes');
-      mounted.directory('/mnt/sd/.tempo.stage').createSync();
-      mounted.directory('/mnt/sd/.tempo.stage').renameSync('/mnt/sd/.tempo');
-      expect(b.directory('/card/.tempo').existsSync(), true);
+      mounted.directory('/mnt/sd/.cadence.stage').createSync();
+      mounted
+          .directory('/mnt/sd/.cadence.stage')
+          .renameSync('/mnt/sd/.cadence');
+      expect(b.directory('/card/.cadence').existsSync(), true);
       expect(
         () =>
             mounted.file('/home/tempo/selector').renameSync('/mnt/sd/selector'),
@@ -186,11 +240,12 @@ void main() {
             MediaLibrary.open(databasePath: path, roots: () => []),
       );
       rig.cardSource = CardSource.inMemory;
+      rig.cardInserted = true;
       await rig.initializeStorage();
       await rig.services.library.scan();
       await rig.dataStorage.setPolicy(DataStoragePolicy.yes);
       final file = rig.places.value.fileSystem.file(
-        '/mnt/sd/.tempo/library.db',
+        '/mnt/sd/.cadence/library.db',
       );
       expect(
         String.fromCharCodes(file.readAsBytesSync().take(15)),
@@ -201,13 +256,13 @@ void main() {
         DataStoragePolicy.no,
         replaceExisting: true,
       );
-      expect(rig.places.value.data, '/home/tempo/.tempo');
+      expect(rig.dataStorage.value.usingCard, isFalse);
       await rig.services.library.scan();
       await rig.closeProfile();
       expect(
         String.fromCharCodes(
           rig.places.value.fileSystem
-              .file('/home/tempo/.tempo/library.db')
+              .file('/home/tempo/.cadence/library.db')
               .readAsBytesSync()
               .take(15),
         ),
@@ -221,6 +276,7 @@ void main() {
     (tester) async {
       final rig = Rig();
       rig.cardSource = CardSource.inMemory;
+      rig.cardInserted = true;
       await rig.initializeStorage();
       tester.view.physicalSize = const Size(1200, 1800);
       tester.view.devicePixelRatio = 1;
@@ -244,7 +300,7 @@ void main() {
         tester.widget<TempoApp>(find.byType(TempoApp)).services,
         same(rig.services),
       );
-      expect(rig.places.value.config, '/mnt/sd/.tempo/config');
+      expect(rig.places.value.config, '/home/tempo/.config/tempo');
       expect(rig.dataStorage.value.busy, false);
       await tester.pumpWidget(const SizedBox.shrink());
       await rig.closeProfile();
@@ -258,6 +314,7 @@ void main() {
     () async {
       final rig = Rig();
       rig.cardSource = CardSource.inMemory;
+      rig.cardInserted = true;
       await rig.initializeStorage();
       final services = rig.services;
       var flushes = 0;

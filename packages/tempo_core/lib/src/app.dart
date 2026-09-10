@@ -106,6 +106,9 @@ class _TempoAppState extends State<TempoApp> {
       _file?.watch();
       _storagePaused = false;
     }
+    // The question is asked once per card: taking the card out clears the
+    // way for the next one to ask again.
+    if (!status.cardPresent) _storagePrompted = false;
     if (_storagePrompted ||
         status.busy ||
         status.restarting ||
