@@ -15,8 +15,10 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- kernel cross build -----------------------------------------------------
-# python3 stays because parts of the kernel build and our boot-image packaging
-# are Python; it is not here for U-Boot, which this project does not use.
+# python3 stays because parts of the kernel build, the recovery packer
+# (platform/recovery/pack.py) and the dist rootfs check are Python; boot-image
+# packaging itself is Dart. It is not here for U-Boot, which this project does
+# not use.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-arm-linux-gnueabihf \
         libc6-dev-armhf-cross \

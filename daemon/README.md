@@ -215,7 +215,7 @@ operation; remote controllers can manipulate an already-loaded music queue.
 The existing missing-libmpv fallback simulates silent playback; it is not proof
 of working audio. Production audio/video acceptance uses real receiver capture.
 
-`DeviceMonitor` owns five-second observations: battery through the native Unix
+`DeviceMonitor` owns one-second observations: battery through the native Unix
 control service, and mounted-card discovery through `/proc/mounts`. It decodes
 mount escapes and publishes unknown state when a source disappears. The app
 polls the authenticated cached `/api/v1/device` snapshot every five seconds and

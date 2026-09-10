@@ -6,11 +6,12 @@
 # build/initramfs/init. Edit this file, never the rendered one.
 #
 # Boot flow:
-#   1. If Debian is already on the eMMC rootfs partition (mmcblk0p1, carved from
-#      the kernel cmdline over the ANDROID region), switch_root into it.
+#   1. If Debian is already on the eMMC rootfs partition (mmcblk0p1, defined by
+#      Tempo's own MBR at sector zero; see docs/platform/boot-and-flashing.md),
+#      switch_root into it.
 #   2. Otherwise, look for the Debian image (@HOSTNAME@.ext4[.gz]) on the microSD
-#      and install it onto mmcblk0p1 (SPFT can't write big partitions, but the
-#      eMMC is writable from Linux and the SD is readable) - then boot it.
+#      and install it onto mmcblk0p1 (the eMMC is writable from Linux and the SD
+#      is readable, so no flashing tool is involved) - then boot it.
 #   3. Otherwise drop to a diagnostic shell.
 
 /bin/busybox --install -s /bin 2>/dev/null
@@ -151,8 +152,8 @@ EOF
 	fi
 }
 
-# The installed rootfs image is only ~512MB but mmcblk0p1 spans ~7.2GB (see the
-# blkdevparts cmdline). busybox has no resize2fs and stuffing e2fsprogs into this
+# The installed rootfs image is only ~512MB but mmcblk0p1 spans ~7.2GB (see
+# TempoLayout in packages/tempo_build). busybox has no resize2fs and stuffing e2fsprogs into this
 # kernel-embedded initramfs risks LK truncating the image, so grow the fs from
 # the rootfs's OWN resize2fs on first boot: drop a one-shot systemd unit (like
 # the serial-getty tweak above). resize2fs is self-guarding - it grows online to

@@ -332,7 +332,8 @@ flutter:
     icudtl: /usr/share/flutter/icudtl.dat
     bundle: /opt/tempo/flutter_assets
   # Holding both volume keys at boot starts the debug (JIT) build with the
-  # Dart VM service on this port, bound to the gadget link.
+  # Dart VM service on this port, listening on every address with auth codes
+  # disabled; the firewall admits it only over the gadget link.
   vm_service_port: 41200
 
 firmware:
