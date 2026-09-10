@@ -199,6 +199,29 @@ fn dispatch(line: &[u8], fds: Vec<OwnedFd>, stream: &UnixStream, state: &State) 
             fields.insert("version".into(), json!(settings::VERSION));
             (protocol::ok_line(fields), After::Nothing)
         }
+        Op::FormatSd | Op::EjectSd => {
+            let command = if matches!(op, Op::FormatSd) {
+                "format-sd"
+            } else {
+                "eject-sd"
+            };
+            let reply = match std::process::Command::new("/usr/local/lib/tempo-system/tempo-system")
+                .arg(command)
+                .output()
+            {
+                Ok(output) if output.status.success() => protocol::ok_line(Map::new()),
+                Ok(output) => protocol::error_line(String::from_utf8_lossy(&output.stderr).trim()),
+                Err(error) => protocol::error_line(error.to_string()),
+            };
+            (reply, After::Nothing)
+        }
+        Op::Power(action) => {
+            let reply = match crate::power::request(action) {
+                Ok(()) => protocol::ok_line(Map::new()),
+                Err(error) => protocol::error_line(error),
+            };
+            (reply, After::Nothing)
+        }
         Op::Timezone(zone) => {
             let reply = match timezone::set(&zone) {
                 Ok(()) => protocol::ok_line(Map::from_iter([("zone".into(), json!(zone))])),
@@ -425,7 +448,7 @@ mod tests {
 
     #[test]
     fn unknown_and_malformed() {
-        let v = roundtrip(b"{\"op\":\"reboot\"}\n", &[]);
+        let v = roundtrip(b"{\"op\":\"unsupported\"}\n", &[]);
         assert_eq!(v, json!({"ok": false, "error": "unknown op"}));
         let v = roundtrip(b"{not json\n", &[]);
         assert_eq!(v["ok"], json!(false));

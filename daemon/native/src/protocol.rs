@@ -21,6 +21,9 @@ pub const MAX_REQUEST_LEN: usize = 64 * 1024;
 pub enum Op {
     /// `{"op":"ping"}` -> `{"ok":true,"version":...}`
     Ping,
+    Power(crate::power::Action),
+    FormatSd,
+    EjectSd,
     /// Set Debian’s IANA time zone through systemd-timedated.
     Timezone(String),
     /// `{"op":"battery"}` -> `{"ok":true, ...latest sample...}`
@@ -56,6 +59,7 @@ pub enum Op {
 #[derive(Deserialize)]
 struct Request {
     op: String,
+    confirm: Option<bool>,
     zone: Option<String>,
     // The screen op's fields; ignored by every other op.
     on: Option<bool>,
@@ -88,7 +92,12 @@ pub fn parse_request(line: &[u8]) -> Result<Op, String> {
     let req: Request = serde_json::from_str(text).map_err(|e| format!("malformed request: {e}"))?;
     Ok(match req.op.as_str() {
         "ping" => Op::Ping,
+        "reboot" => Op::Power(crate::power::Action::Restart),
+        "poweroff" => Op::Power(crate::power::Action::Shutdown),
+        "format-sd" if req.confirm == Some(true) => Op::FormatSd,
+        "format-sd" => return Err("Formatting requires explicit confirmation".into()),
         "timezone" => Op::Timezone(req.zone.ok_or("timezone needs a zone")?),
+        "eject-sd" => Op::EjectSd,
         "battery" => Op::Battery,
         "drm-handoff" => Op::DrmHandoff,
         "screen" => Op::Screen(screen::Request {
@@ -149,6 +158,20 @@ fn line(value: Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sd_maintenance_requests() {
+        assert_eq!(
+            super::parse_request(br#"{"op":"eject-sd"}"#).unwrap(),
+            super::Op::EjectSd
+        );
+        assert_eq!(
+            super::parse_request(br#"{"op":"format-sd","confirm":true}"#).unwrap(),
+            super::Op::FormatSd
+        );
+        assert!(super::parse_request(br#"{"op":"format-sd"}"#).is_err());
+        assert!(super::parse_request(br#"{"op":"format-sd","confirm":false}"#).is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -244,8 +267,8 @@ mod tests {
     #[test]
     fn unknown_op_is_reported_not_rejected() {
         assert_eq!(
-            parse_request(br#"{"op":"reboot"}"#),
-            Ok(Op::Unknown("reboot".into()))
+            parse_request(br#"{"op":"unsupported"}"#),
+            Ok(Op::Unknown("unsupported".into()))
         );
     }
 

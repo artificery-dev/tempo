@@ -81,6 +81,36 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('power failure remains visible and can be retried', (
+    tester,
+  ) async {
+    final wheel = await pumpAndOpen(tester);
+    PowerDialog.perform = (_) async => throw StateError('daemon refused');
+    await press(tester, wheel, WheelButton.select);
+    expect(find.byType(PowerDialog), findsOneWidget);
+    expect(find.textContaining('daemon refused'), findsOneWidget);
+    PowerDialog.perform = (command) async => performed.add(command);
+    await press(tester, wheel, WheelButton.select);
+    expect(performed, [PowerCommand.restart]);
+    expect(find.byType(PowerDialog), findsNothing);
+  });
+
+  testWidgets('pending power action only sends once', (tester) async {
+    final wheel = await pumpAndOpen(tester);
+    final completed = Completer<void>();
+    PowerDialog.perform = (command) {
+      performed.add(command);
+      return completed.future;
+    };
+    wheel.press(WheelButton.select);
+    await tester.pump();
+    wheel.press(WheelButton.select);
+    await tester.pump();
+    expect(performed, [PowerCommand.restart]);
+    completed.complete();
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('opens on a hold with Restart under the box, and the wheel '
       'slides, gives, lets go, and comes back', (tester) async {
     final wheel = await pumpAndOpen(tester);
@@ -262,16 +292,9 @@ void main() {
       rowOf(settings.tree.at('/settings/power')!, 'shutdown'),
     );
     await press(tester, wheel, WheelButton.select);
-    expect(find.text('Power the player off?'), findsOneWidget);
+    expect(find.byType(PowerDialog), findsOneWidget);
+    expect(lit(tester), 'Power Off');
     expect(done, isEmpty, reason: 'nothing done on the way in');
-
-    // Cancel is where the wheel lands, so a stray press is harmless.
-    await press(tester, wheel, WheelButton.select);
-    expect(done, isEmpty);
-
-    // And saying it plainly does it.
-    await press(tester, wheel, WheelButton.select);
-    await jog(tester, wheel, 1);
     await press(tester, wheel, WheelButton.select);
     expect(done, [PowerCommand.shutDown]);
   });
