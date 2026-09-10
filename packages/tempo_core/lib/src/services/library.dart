@@ -432,9 +432,20 @@ class MediaLibrary implements CollectionLibrary {
                   _summary(item, nextVideoFiles),
             ];
       if (_disposed) return;
+      // Rows under a root the shelf knows, and only where that root can be
+      // reached right now: a card's tracks leave the shelf with the card,
+      // whatever the database still remembers of them, and come back with
+      // it - which is what the device does, and what the emulator cannot
+      // learn from its disk, where the folder behind the card stays put.
       final roots = rootsFor(entry.key);
+      final reachable = locations?.call();
       final visible = items
-          .where((item) => roots.any((root) => p.isWithin(root, item.path)))
+          .where(
+            (item) =>
+                roots.any((root) => p.isWithin(root, item.path)) &&
+                (reachable == null ||
+                    reachable.any((where) => p.isWithin(where, item.path))),
+          )
           .toList();
       nextShelves[entry.key] = visible;
     }
@@ -483,6 +494,9 @@ class MediaLibrary implements CollectionLibrary {
     final present = _storage!.value.present;
     final was = _cardPresent;
     _cardPresent = present;
+    // The shelves follow the slot at once, whatever the reading means for
+    // scanning: what is under a root that just went away leaves the shelf.
+    if (present != was) unawaited(_refresh());
     // The first reading is the baseline, not an arrival.
     if (was == null || present == was) return;
     _cardScan?.cancel();

@@ -239,6 +239,50 @@ void main() {
       expect(library.tracks.value.single.title, 'a');
     });
 
+    test('a card\'s tracks leave the shelf with the card and return with '
+        'it, without a scan', () async {
+      write('home/Music/h.mp3');
+      write('card/Music/c.mp3');
+      final home = p.join(root.path, 'home');
+      final card = p.join(root.path, 'card');
+      final inSlot = StorageReading(
+        present: true,
+        label: 'SD card',
+        path: card,
+      );
+      final storage = ValueNotifier(inSlot);
+      final library = MediaLibrary.over(
+        _client(),
+        roots: () => [
+          p.join(home, 'Music'),
+          if (storage.value.present) p.join(card, 'Music'),
+        ],
+        locations: () => [home, if (storage.value.present) card],
+        storage: storage,
+        cardSettle: const Duration(milliseconds: 50),
+      );
+      addTearDown(library.dispose);
+      await until(() => library.status.value.ready);
+      await library.scan();
+      expect(
+        library.tracks.value.map((t) => t.title),
+        unorderedEquals(['h', 'c']),
+      );
+      final scans = library.status.value.scan;
+
+      storage.value = StorageReading.empty;
+      await until(() => library.tracks.value.length == 1);
+      expect(library.tracks.value.single.title, 'h');
+      expect(library.status.value.scan, same(scans), reason: 'no scan to hide');
+
+      storage.value = inSlot;
+      await until(() => library.tracks.value.length == 2);
+      expect(
+        library.tracks.value.map((t) => t.title),
+        unorderedEquals(['h', 'c']),
+      );
+    });
+
     test('an empty library scans by itself after the wait; one with '
         'tracks looks the card over after its own, quietly', () async {
       write('card/Music/a.mp3');

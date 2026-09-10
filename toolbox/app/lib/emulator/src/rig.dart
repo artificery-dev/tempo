@@ -337,14 +337,17 @@ class Rig extends ChangeNotifier {
           : MediaLibrary.open(
               databasePath: _databasePath(),
               roots: hostRoots,
+              // The card's folders only while a host-folder card is in the
+              // slot: out of the slot, its files are still on this disk,
+              // but the player must not be able to reach them.
               sectionRoots: (section) => [
                 '${Paths.ensureHome().path}/${section.label}',
-                if (_cardSource == CardSource.hostFolder)
+                if (_cardInserted && _cardSource == CardSource.hostFolder)
                   '${_hostFolder.isEmpty ? Paths.ensureCard().path : _hostFolder}/${section.label}',
               ],
               locations: () => [
                 Paths.ensureHome().path,
-                if (_cardSource == CardSource.hostFolder)
+                if (_cardInserted && _cardSource == CardSource.hostFolder)
                   _hostFolder.isEmpty ? Paths.ensureCard().path : _hostFolder,
               ],
               storage: storage,
