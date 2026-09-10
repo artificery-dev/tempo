@@ -2,6 +2,8 @@
 set -eu
 for module in drm_kms_helper drm_display_helper mtk-smi panel-gc9503v mediatek-drm; do
     name=$(echo "$module" | tr '-' '_')
+    # Built into the kernel, or already loaded: nothing to do.
+    [ -f "/modules/$module.ko" ] || continue
     [ ! -d "/sys/module/$name" ] || continue
     echo "Recovery: loading $module"
     echo "Recovery: loading $module" > /dev/kmsg
