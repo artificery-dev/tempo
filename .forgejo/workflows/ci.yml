@@ -95,9 +95,11 @@ jobs:
     steps:
       # kaniko's image has busybox (whose wget lacks TLS) but no git, curl or
       # node. Credentials are therefore obtained by a curl docker action,
-      # which shares the job workspace, and kaniko clones the source itself
-      # through its git context, pinned to the exact commit.
-      - name: Obtain registry credentials
+      # which shares the job workspace; the same step fetches the Containerfile
+      # at the exact commit, since it copies nothing else from the checkout.
+      # (kaniko's own git context is not an option here: go-git reports the
+      # LFS-tracked firmware blobs as unstaged changes and refuses.)
+      - name: Obtain registry credentials and the Containerfile
         uses: docker://docker.io/curlimages/curl:8.22.0
         env:
           IMAGE: ${{ needs.toolchain.outputs.image }}
@@ -123,22 +125,22 @@ jobs:
             status=$(curl -sS -o /dev/null -w "%{http_code}" -u "$user:$pass" "https://$registry/v2/token?service=container_registry&scope=repository:$path:pull,push");
             [ "$status" = 200 ] || { echo "::error::Registry $registry refused push credentials from $how (HTTP $status)"; exit 1; };
             echo "Registry $registry accepted push credentials from $how";
-            printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "$registry" "$(printf "%s:%s" "$user" "$pass" | base64 | tr -d "\n")" > "$GITHUB_WORKSPACE/.registry-auth.json"
+            printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "$registry" "$(printf "%s:%s" "$user" "$pass" | base64 | tr -d "\n")" > "$GITHUB_WORKSPACE/.registry-auth.json";
+            mkdir -p "$GITHUB_WORKSPACE/context";
+            curl -fsSL "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/commit/$GITHUB_SHA/platform/toolchain/Containerfile" -o "$GITHUB_WORKSPACE/context/Containerfile";
+            echo "Fetched platform/toolchain/Containerfile at $GITHUB_SHA"
             '
       - name: Build platform/toolchain/Containerfile with kaniko and push
         env:
           IMAGE: ${{ needs.toolchain.outputs.image }}
-          GIT_USERNAME: ${{ github.actor }}
-          GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           mkdir -p /kaniko/.docker
           mv "$GITHUB_WORKSPACE/.registry-auth.json" /kaniko/.docker/config.json
-          context="git://${GITHUB_SERVER_URL#*://}/${GITHUB_REPOSITORY}.git#${GITHUB_REF}#${GITHUB_SHA}"
-          echo "Building $IMAGE from $context"
+          echo "Building $IMAGE from the Containerfile at $GITHUB_SHA"
           /kaniko/executor \
-            --context "$context" \
-            --dockerfile platform/toolchain/Containerfile \
+            --context "dir://$GITHUB_WORKSPACE/context" \
+            --dockerfile Containerfile \
             --destination "$IMAGE" \
             --custom-platform linux/amd64 \
             --snapshot-mode redo \
