@@ -1,11 +1,12 @@
 # Tempo CI: check the workspace, build each component in its own job, and
 # publish the packages as a release from a tag.
 #
-# Job graph: toolchain -> check -> {recovery -> toolbox, daemon, cadence}
-# -> release. Every component job builds one thing so a failure names its
-# component; the Toolbox needs Recovery's images, and release collects the
-# tarballs the component jobs uploaded. Package versions come from
-# .forgejo/version.sh so every job agrees on the file names.
+# Job graph: toolchain -> check -> {recovery -> toolbox, daemon, cadence,
+# app, splash, kernel} -> release. Every component job builds one thing so
+# a failure names its component; the Toolbox needs Recovery's images, and
+# release collects the tarballs the component jobs uploaded. Package
+# versions come from .forgejo/version.sh so every job agrees on the file
+# names.
 #
 # The runners are container-only (no docker socket, unprivileged), so every
 # job runs inside an image. The check and component jobs run inside the toolchain
@@ -36,9 +37,13 @@
 # and must sit on the ci branch. Move `ci-test` and push it again to exercise
 # the release path; delete the release and the tag once it has proved itself.
 #
-# The firmware image (.y2-firmware) is not built here: its rootfs needs
-# rootful Podman with binfmt, which these runners do not have. It remains a
-# local `toolbox dev build`.
+# Not built here: the rootfs and therefore the firmware image (`dist`). The
+# rootfs build needs rootful Podman with binfmt (debootstrap under
+# qemu-arm-static in a chroot on a loop-mounted ext4 image), which these
+# container-only runners cannot provide, and the image bakes in the device
+# user's credentials from config.local.yaml. Both become jobs once a
+# privileged (VM-backed) runner exists and the credentials are secrets;
+# until then the firmware remains a local `toolbox dev build`.
 name: CI
 
 "on":
@@ -406,9 +411,148 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  app:
+    name: Build Tempo app
+    # The Y2's app: flutter-pi engine binaries, the flutter-pi embedder
+    # cross-built for ARM, and the AOT-compiled Flutter bundle.
+    needs: [toolchain, check]
+    runs-on: linux-amd64-container
+    timeout-minutes: 90
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+          # flutter-pi is the submodule; its revision is checked against config.yaml.
+          submodules: recursive
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Restore the pinned Flutter SDKs
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Provision the pinned Flutter SDKs
+        run: sh .forgejo/sdks.sh
+      - name: Resolve the build tool and the workspace
+        run: |
+          cd toolbox/cli
+          "$DART" pub get
+          "$DART" run bin/toolbox.dart dev workspace get
+      - name: Fetch the flutter-pi engine binaries
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi engine
+      - name: Build flutter-pi
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi build
+      - name: Build the app bundle
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app build --release
+      - name: Package
+        run: |
+          set -eu
+          mkdir -p build/dist
+          tar -C build -czf build/dist/tempo-app-armhf.tar.gz --exclude=engine-binaries app
+          ls -la build/dist
+      - name: Save the app bundle
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: tempo-app
+          path: build/dist/tempo-app-armhf.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+  splash:
+    name: Build splash
+    needs: [toolchain, check]
+    runs-on: linux-amd64-container
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Resolve the build tool
+        run: cd toolbox/cli && "$DART" pub get
+      - name: Render the splash assets
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os splash assets
+      - name: Build the splash images
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os splash build
+      - name: Save the splash images
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: splash
+          path: build/os/splash
+          retention-days: 30
+          if-no-files-found: error
+
+  kernel:
+    name: Build kernel
+    # zImage, device tree and the initramfs packed into boot.img. Without a
+    # rootfs build the initramfs carries no Plymouth payload, so this proves
+    # the kernel and its configuration, not the shipping boot image.
+    needs: [toolchain, check]
+    runs-on: linux-amd64-container
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+          # The kernel is the submodule; its revision is a build input.
+          submodules: recursive
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Resolve the build tool
+        run: cd toolbox/cli && "$DART" pub get
+      - name: Build the kernel and boot image
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os kernel build
+      - name: Save the boot image
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: boot-image
+          path: build/os/kernel/boot.img
+          retention-days: 30
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: [daemon, toolbox, cadence]
+    needs: [daemon, toolbox, cadence, app, splash, kernel]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: linux-amd64-container
     timeout-minutes: 15
