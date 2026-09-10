@@ -9,6 +9,7 @@ import 'package:tomeui/tomeui.dart';
 import 'package:tempo_data/tempo_data.dart';
 
 import 'data_storage.dart';
+import 'swappable_library.dart';
 
 import 'paths.dart';
 
@@ -176,6 +177,10 @@ class Rig extends ChangeNotifier {
       if (!_disposed) dataStorage.failure(error, unavailable: true);
       rethrow;
     } finally {
+      // The next body opens the next profile's library through fresh
+      // services; the old ones outlive the restart only for the view that
+      // is being replaced.
+      _services = null;
       profileGeneration++;
       profileSuspended = false;
       if (!_disposed) notifyListeners();
@@ -283,11 +288,16 @@ class Rig extends ChangeNotifier {
     }
   }
 
-  Future<void> closeProfile() => _closeLibrary();
-  Future<void> _closeLibrary() async {
-    final library = _services?.library;
+  Future<void> closeProfile() async {
+    await _closeLibrary();
     _services = null;
-    if (library != null) await library.dispose();
+  }
+
+  /// Close the open library and bring its database home. The services
+  /// stay: a screen that rebuilds meanwhile must not open another library
+  /// over a file that is still closing.
+  Future<void> _closeLibrary() async {
+    await _library.replace(() => null);
     final bridge = _libraryBridge;
     if (bridge != null) {
       final db = bridge.childFile('library.db');
@@ -307,7 +317,45 @@ class Rig extends ChangeNotifier {
   }
 
   PlaybackService? _playback;
+
+  /// The library the player holds for its whole run; what is open behind
+  /// it follows the profile.
+  final _library = SwappableLibrary();
+
+  /// The library over the active profile, or nothing while storage is
+  /// unavailable. The player's own scanner reads the host folders behind
+  /// the emulated card and home, since the scanner and the player both
+  /// read the machine's own disk - not under the test harness, whose home
+  /// is the machine the tests run on, the same rule the device keeps.
+  LibraryService? _openLibrary() {
+    if (!dataStorage.value.available) return null;
+    if (libraryFactory case final factory?) return factory(_databasePath());
+    if (_underTest) return null;
+    return MediaLibrary.open(
+      databasePath: _databasePath(),
+      roots: hostRoots,
+      // The card's folders only while a host-folder card is in the
+      // slot: out of the slot, its files are still on this disk,
+      // but the player must not be able to reach them.
+      sectionRoots: (section) => [
+        '${Paths.ensureHome().path}/${section.label}',
+        if (_cardInserted && _cardSource == CardSource.hostFolder)
+          '${_hostFolder.isEmpty ? Paths.ensureCard().path : _hostFolder}/${section.label}',
+      ],
+      locations: () => [
+        Paths.ensureHome().path,
+        if (_cardInserted && _cardSource == CardSource.hostFolder)
+          _hostFolder.isEmpty ? Paths.ensureCard().path : _hostFolder,
+      ],
+      storage: storage,
+      autoScan: const Duration(seconds: 3),
+      recheck: const Duration(seconds: 5),
+    );
+  }
+
   PlayerServices _createServices() {
+    // Nothing is open yet, so this takes effect at once.
+    unawaited(_library.replace(_openLibrary));
     return PlayerServices(
       dataStorage: dataStorage,
       battery: battery,
@@ -328,32 +376,7 @@ class Rig extends ChangeNotifier {
       // read the machine's own disk. Not under the test harness, whose
       // home is the machine the tests run on - the same rule the device
       // keeps.
-      library: !dataStorage.value.available
-          ? null
-          : libraryFactory != null
-          ? libraryFactory!(_databasePath())
-          : _underTest
-          ? null
-          : MediaLibrary.open(
-              databasePath: _databasePath(),
-              roots: hostRoots,
-              // The card's folders only while a host-folder card is in the
-              // slot: out of the slot, its files are still on this disk,
-              // but the player must not be able to reach them.
-              sectionRoots: (section) => [
-                '${Paths.ensureHome().path}/${section.label}',
-                if (_cardInserted && _cardSource == CardSource.hostFolder)
-                  '${_hostFolder.isEmpty ? Paths.ensureCard().path : _hostFolder}/${section.label}',
-              ],
-              locations: () => [
-                Paths.ensureHome().path,
-                if (_cardInserted && _cardSource == CardSource.hostFolder)
-                  _hostFolder.isEmpty ? Paths.ensureCard().path : _hostFolder,
-              ],
-              storage: storage,
-              autoScan: const Duration(seconds: 3),
-              recheck: const Duration(seconds: 5),
-            ),
+      library: _underTest && libraryFactory == null ? null : _library,
       // Sound, when the desk has a libmpv; the silent player otherwise.
       playback: _underTest ? null : (_playback ??= _hostPlayback()),
     );
@@ -496,7 +519,7 @@ class Rig extends ChangeNotifier {
   /// as one merged state.
   void _followCard() {
     if (dataStorage.value.usingCard || !dataStorage.value.available) {
-      _restartForCard();
+      _switchProfileForCard();
       return;
     }
     final m = _storageManager();
@@ -507,7 +530,7 @@ class Rig extends ChangeNotifier {
         m.sdPaths != null &&
         m.fs.directory(m.sdPaths!.data).existsSync();
     if (policy == TempoStoragePolicy.yes && cardProfile) {
-      _restartForCard();
+      _switchProfileForCard();
       return;
     }
     dataStorage.publish(
@@ -521,15 +544,26 @@ class Rig extends ChangeNotifier {
     );
   }
 
-  void _restartForCard() {
+  /// A card coming or going moves the profile without restarting the
+  /// player, as the device's does: the open library closes and goes home,
+  /// the profile is decided again from the slot, and the next library
+  /// opens behind the same services and the same screens.
+  void _switchProfileForCard() {
     _cardRefresh = _cardRefresh.then((_) async {
       if (_disposed) return;
       try {
         await dataStorage.beforeChange?.call();
-        await _restartProfile();
+        await _closeLibrary();
+        final decision = await _storageManager().applyPendingAtStartup();
+        if (_disposed) return;
+        _profilePaths = decision.activePaths;
+        places.value = _machine();
+        dataStorage.publish(decision);
+        if (_services != null) await _library.replace(_openLibrary);
       } catch (error) {
         if (!_disposed) dataStorage.failure(error, unavailable: true);
       }
+      if (!_disposed) notifyListeners();
     });
   }
 
@@ -618,7 +652,7 @@ class Rig extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     if (_services != null) {
-      unawaited(_closeLibrary());
+      unawaited(_closeLibrary().then((_) => _library.dispose()));
       final playback = _playback;
       if (playback is ChangeNotifier) (playback as ChangeNotifier).dispose();
     }

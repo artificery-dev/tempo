@@ -143,6 +143,9 @@ void main() {
     rig.cardInserted = false;
     await tester.pump();
     expect(rig.storage.value, StorageReading.empty);
+    // Each change put a notice up; its clock must not outlive the test.
+    Osd.hide();
+    await tester.pump();
   });
 
   testWidgets('the rig opens over the device, with the card sources spelled '

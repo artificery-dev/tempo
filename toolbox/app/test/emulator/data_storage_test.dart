@@ -132,6 +132,40 @@ void main() {
     await rig.closeProfile();
     rig.dispose();
   });
+  test('a card-profile card coming or going swaps the library in place, '
+      'without a restart', () async {
+    final events = <String>[];
+    final rig = Rig(libraryFactory: (path) => ClosingLibrary(path!, events));
+    rig.cardSource = CardSource.inMemory;
+    rig.cardInserted = true;
+    await rig.initializeStorage();
+    rig.services;
+    await rig.dataStorage.setPolicy(DataStoragePolicy.yes);
+    expect(rig.dataStorage.value.usingCard, isTrue);
+    final generation = rig.profileGeneration;
+    final services = rig.services;
+    final shelf = services.library.tracks;
+    events.clear();
+
+    rig.cardInserted = false;
+    await rig.cardSettled;
+    expect(rig.profileGeneration, generation, reason: 'no restart');
+    expect(identical(rig.services, services), isTrue);
+    expect(identical(services.library.tracks, shelf), isTrue);
+    expect(rig.dataStorage.value.usingCard, isFalse);
+    expect(rig.dataStorage.value.available, isTrue);
+    expect(events, ['close']);
+
+    events.clear();
+    rig.cardInserted = true;
+    await rig.cardSettled;
+    expect(rig.profileGeneration, generation);
+    expect(identical(rig.services, services), isTrue);
+    expect(rig.dataStorage.value.usingCard, isTrue);
+    expect(events, ['close']);
+    await rig.closeProfile();
+    rig.dispose();
+  });
   test('adopting existing memory card never overwrites its profile', () async {
     final rig = Rig();
     rig.cardSource = CardSource.inMemory;
