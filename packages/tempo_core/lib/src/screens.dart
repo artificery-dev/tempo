@@ -341,11 +341,12 @@ class NowPlayingCard extends StatelessWidget {
     final theme = ThemeProvider.of(context);
     final track = now.track;
     if (track == null) return const SizedBox.shrink();
-    // The primary's wash: the card is the one thing on home that is about
-    // what the player is *doing*, and it says so in the brand's color
-    // rather than in the notices' neutral.
+    // The neutral's wash, like a notice: the card is a strip of fact along
+    // the foot of home - what is playing - and it is the controls on it,
+    // the bar and its thumb, that wear the brand's color, so the eye goes
+    // to what the wheel can move.
     final dress = theme.widgets.surface.resolve(
-      SemanticSwatch.primary,
+      SemanticSwatch.neutral,
       SurfaceVariant.subtle,
     );
     final ink = dress.foreground;
