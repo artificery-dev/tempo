@@ -227,9 +227,13 @@ class MediaLibrary implements CollectionLibrary {
 
   static Future<MediaClient> _host(String? path, ScanPolicy policy) async {
     if (path != null) Directory(p.dirname(path)).createSync(recursive: true);
+    // The database on its own isolate: a scan's writes and a shelf's reads
+    // must not stall the wheel, as they would on the UI isolate.
     return hostMediaService(
       MediaDatabase(
-        path == null ? NativeDatabase.memory() : NativeDatabase(File(path)),
+        path == null
+            ? NativeDatabase.memory()
+            : NativeDatabase.createInBackground(File(path)),
       ),
       policy: policy,
     );

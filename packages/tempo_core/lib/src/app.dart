@@ -341,6 +341,7 @@ class _TempoAppState extends State<TempoApp> {
                       // notice.)
                       VolumeToasts(volume: services.volume, awake: awake),
                       OutputToasts(output: services.output),
+                      CardToasts(storage: services.storage),
                       const OsdLayer(),
                       Positioned(
                         bottom: 2,
