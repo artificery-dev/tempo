@@ -321,6 +321,39 @@ Future<int> secretsCommand(
   return 0;
 }
 
+/// The workspace's component names, as `--component` selects them.
+const workspaceComponents = ['app', 'daemon', 'toolbox'];
+
+String? _takeComponent(List<String> args) {
+  final index = args.indexOf('--component');
+  if (index < 0) return null;
+  if (index + 1 >= args.length ||
+      !workspaceComponents.contains(args[index + 1])) {
+    throw BuildFailure(
+      'Expected --component ${workspaceComponents.join('|')}',
+      2,
+    );
+  }
+  final component = args[index + 1];
+  args.removeRange(index, index + 2);
+  return component;
+}
+
+/// Which component a package root belongs to. The daemon is its own; the
+/// other members of the root pub workspace make up the app; every package
+/// that resolves on its own is part of the Toolbox.
+String workspaceComponent(Repository repository, String root) {
+  if (p.equals(root, repository.path('daemon'))) return 'daemon';
+  final spec = File(p.join(root, 'pubspec.yaml'));
+  if (spec.existsSync() &&
+      RegExp(
+        r'^resolution:\s*workspace\s*$',
+        multiLine: true,
+      ).hasMatch(spec.readAsStringSync()))
+    return 'app';
+  return 'toolbox';
+}
+
 Future<int> workspaceCommand(
   Repository repository,
   BuildConfig config,
@@ -330,8 +363,10 @@ Future<int> workspaceCommand(
 ) async {
   if (!['get', 'analyze', 'test', 'format'].contains(action))
     throw BuildFailure('Expected workspace get, analyze, test, or format', 2);
+  args = [...args];
+  final component = _takeComponent(args);
   final sdk = await FlutterSdk.discover(config, runner);
-  final roots = <String>[repository.path('app'), repository.path('daemon')];
+  var roots = <String>[repository.path('app'), repository.path('daemon')];
   final packages = Directory(repository.path('packages'));
   if (packages.existsSync()) {
     for (final entry in packages.listSync().whereType<Directory>()) {
@@ -344,6 +379,13 @@ Future<int> workspaceCommand(
       roots.add(repository.path(relative));
   }
   roots.sort();
+  if (component != null) {
+    roots = roots
+        .where((root) => workspaceComponent(repository, root) == component)
+        .toList();
+  }
+  // The root resolution belongs to the workspace members: the app and daemon.
+  final resolveRoot = component == null || component != 'toolbox';
   if (action == 'format')
     return runner.run(sdk.dart, [
       'format',
@@ -351,7 +393,7 @@ Future<int> workspaceCommand(
       ...roots,
     ], workingDirectory: repository.root);
   final failures = <String>[];
-  if (action == 'get') {
+  if (action == 'get' && resolveRoot) {
     final code = await runner.run(
       sdk.flutter,
       ['pub', 'get', ...args],

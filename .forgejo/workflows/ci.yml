@@ -1,12 +1,13 @@
-# Tempo CI: check the workspace, build each component in its own job, and
+# Tempo CI: analyze, test and build each component in its own job, and
 # publish the packages as a release from a tag.
 #
-# Job graph: toolchain -> check -> {recovery -> toolbox, daemon, cadence,
-# app, splash, kernel} -> release. Every component job builds one thing so
-# a failure names its component; the Toolbox needs Recovery's images, and
-# release collects the tarballs the component jobs uploaded. Package
-# versions come from .forgejo/version.sh so every job agrees on the file
-# names.
+# Job graph: toolchain -> {check-app, check-daemon, check-toolbox,
+# build-app, build-daemon, recovery -> build-toolbox, cadence, splash,
+# kernel} -> release. A component's checks run beside its build, so a
+# failure names both the component and the stage; the Toolbox build needs
+# Recovery's images, and release waits for every job and collects the
+# tarballs the build jobs uploaded. Package versions come from
+# .forgejo/version.sh so every job agrees on the file names.
 #
 # The runners are container-only (no docker socket, unprivileged), so every
 # job runs inside an image. The check and component jobs run inside the toolchain
@@ -157,8 +158,100 @@ jobs:
             --snapshot-mode redo \
             --compressed-caching=false
 
-  check:
-    name: Analyze and test
+  check-app:
+    name: Analyze and test Tempo app
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+    runs-on: linux-amd64-container
+    timeout-minutes: 60
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      # The jobs run as root; the runner's filesystem refuses to hand files
+      # to the uids inside Flutter's artifact tarballs, so tar keeps them
+      # ours.
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Restore the pinned Flutter SDKs
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Provision the pinned Flutter SDKs
+        run: sh .forgejo/sdks.sh
+      - name: Resolve the build tool
+        run: cd toolbox/cli && "$DART" pub get
+      - name: Resolve the workspace
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get --component app
+      - name: Analyze
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze --component app
+      - name: Test
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test --component app
+
+  check-daemon:
+    name: Analyze and test tempod
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+    runs-on: linux-amd64-container
+    timeout-minutes: 60
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      # The jobs run as root; the runner's filesystem refuses to hand files
+      # to the uids inside Flutter's artifact tarballs, so tar keeps them
+      # ours.
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Restore the pinned Flutter SDKs
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Provision the pinned Flutter SDKs
+        run: sh .forgejo/sdks.sh
+      - name: Resolve the build tool
+        run: cd toolbox/cli && "$DART" pub get
+      - name: Resolve the workspace
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get --component daemon
+      - name: Analyze
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze --component daemon
+      - name: Test
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test --component daemon
+
+  check-toolbox:
+    name: Analyze and test Toolbox
     needs: [toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
@@ -197,17 +290,18 @@ jobs:
       - name: Resolve the build tool
         run: cd toolbox/cli && "$DART" pub get
       - name: Resolve the workspace
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get --component toolbox
       - name: Analyze
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze --component toolbox
       - name: Test
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test --component toolbox
 
   recovery:
-    name: Build Recovery
-    # Component jobs follow check rather than running beside it: the amd64
-    # runners share one host.
-    needs: [toolchain, check]
+    name: Build Recovery images
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
     runs-on: linux-amd64-container
     timeout-minutes: 120
     container:
@@ -255,9 +349,12 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  daemon:
-    name: Build tempod
-    needs: [toolchain, check]
+  build-daemon:
+    name: Build tempod for the Y2
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
@@ -313,10 +410,13 @@ jobs:
           if-no-files-found: error
 
   cadence:
-    name: Fetch cadenced
+    name: Fetch cadenced release
     # Proves the pinned cadenced release is still downloadable and matches
     # its recorded checksum; the firmware build depends on it.
-    needs: [toolchain, check]
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
     runs-on: linux-amd64-container
     timeout-minutes: 15
     container:
@@ -343,8 +443,8 @@ jobs:
       - name: Fetch the pinned cadenced release
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
 
-  toolbox:
-    name: Build Toolbox
+  build-toolbox:
+    name: Build Toolbox for Linux
     needs: [toolchain, recovery]
     runs-on: linux-amd64-container
     timeout-minutes: 120
@@ -411,11 +511,14 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  app:
-    name: Build Tempo app
+  build-app:
+    name: Build Tempo app for the Y2
     # The Y2's app: flutter-pi engine binaries, the flutter-pi embedder
     # cross-built for ARM, and the AOT-compiled Flutter bundle.
-    needs: [toolchain, check]
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
@@ -472,8 +575,11 @@ jobs:
           if-no-files-found: error
 
   splash:
-    name: Build splash
-    needs: [toolchain, check]
+    name: Build splash images
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
     runs-on: linux-amd64-container
     timeout-minutes: 30
     container:
@@ -510,11 +616,14 @@ jobs:
           if-no-files-found: error
 
   kernel:
-    name: Build kernel
+    name: Build kernel and boot image
     # zImage, device tree and the initramfs packed into boot.img. Without a
     # rootfs build the initramfs carries no Plymouth payload, so this proves
     # the kernel and its configuration, not the shipping boot image.
-    needs: [toolchain, check]
+    needs: [toolchain, toolchain-build]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
     runs-on: linux-amd64-container
     timeout-minutes: 180
     container:
@@ -551,8 +660,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish release
-    needs: [daemon, toolbox, cadence, app, splash, kernel]
+    name: Publish release from tag
+    needs: [check-app, check-daemon, check-toolbox, build-app, build-daemon, build-toolbox, cadence, splash, kernel]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: linux-amd64-container
     timeout-minutes: 15

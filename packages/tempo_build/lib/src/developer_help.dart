@@ -76,15 +76,17 @@ const developerCommands = <String, (String, String)>{
     'Remove emulator-specific cache/VM discovery output; preserve selected mock media folders.',
   ),
   'workspace get': (
-    '[pub get arguments]',
-    'Resolve workspace and independent package dependencies with their selected SDKs.',
+    '[--component app|daemon|toolbox] [pub get arguments]',
+    'Resolve workspace and independent package dependencies with their selected SDKs.\n'
+        '--component limits the work to one component: the app (the root pub workspace),\n'
+        'the daemon, or the Toolbox (every package that resolves on its own).',
   ),
   'workspace analyze': (
-    '[analyzer arguments]',
+    '[--component app|daemon|toolbox] [analyzer arguments]',
     'Analyze first-party packages and aggregate failures; arguments are forwarded.',
   ),
   'workspace test': (
-    '[test arguments]',
+    '[--component app|daemon|toolbox] [test arguments]',
     'Test first-party packages and aggregate failures; arguments are forwarded.',
   ),
   'workspace format': (

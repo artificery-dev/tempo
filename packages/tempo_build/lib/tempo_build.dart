@@ -2,7 +2,8 @@ library;
 
 export 'src/context.dart';
 export 'src/process.dart';
-export 'src/commands.dart' show runDeveloperCommand;
+export 'src/commands.dart'
+    show runDeveloperCommand, workspaceComponent, workspaceComponents;
 export 'src/kernel.dart'
     show KernelSource, mtkHeader, bootImage, renderInitramfs;
 export 'src/rootfs.dart' show RootfsImage;
