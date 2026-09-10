@@ -26,10 +26,3 @@ dev_dependencies:
   tempo_build:
     path: packages/tempo_build
 
-# The app runs on the Y2's system SQLite (tempo.service preloads it), so the
-# sqlite3 package's build hook must not compile its own copy: that needs an
-# Android SDK for the bundle's nominal android-arm target, which CI lacks.
-hooks:
-  user_defines:
-    sqlite3:
-      source: system

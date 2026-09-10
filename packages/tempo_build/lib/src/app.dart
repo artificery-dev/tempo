@@ -104,6 +104,13 @@ Future<int> appCommand(
   await runner.run(sdk.flutter, [
     'build',
     'bundle',
+    // Tempo runs under flutter-pi on Linux. Flutter's default bundle target
+    // is android-arm, which makes it run every dependency's build hook for
+    // Android and demand an NDK. The bundle itself is target-independent
+    // (its Dart code becomes app.so through the pinned gen_snapshot below),
+    // so the target only picks which native assets come along, and the
+    // device uses none of them: it preloads the system SQLite.
+    '--target-platform=linux-x64',
     '--asset-dir=${paths.bundle}',
   ], workingDirectory: repo.path('app'));
   final snapshot = File(p.join(paths.bundle, 'app.so'));
@@ -112,23 +119,27 @@ Future<int> appCommand(
   if (snapshot.existsSync()) snapshot.deleteSync();
   if (release) {
     final dill = p.join(paths.app, 'tempo.aot.dill');
-    await runner.run(p.join(sdk.root, 'bin/cache/dart-sdk/bin/dartaotruntime'), [
-      p.join(
-        sdk.root,
-        'bin/cache/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot',
-      ),
-      '--sdk-root',
-      '${p.join(sdk.root, 'bin/cache/artifacts/engine/common/flutter_patched_sdk_product')}/',
-      '--target=flutter',
-      '--aot',
-      '--tfa',
-      '-Ddart.vm.product=true',
-      '--packages',
-      repo.path('.dart_tool/package_config.json'),
-      '--output-dill',
-      dill,
-      'package:tempo/main.dart',
-    ], workingDirectory: repo.path('app'));
+    await runner.run(
+      p.join(sdk.root, 'bin/cache/dart-sdk/bin/dartaotruntime'),
+      [
+        p.join(
+          sdk.root,
+          'bin/cache/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot',
+        ),
+        '--sdk-root',
+        '${p.join(sdk.root, 'bin/cache/artifacts/engine/common/flutter_patched_sdk_product')}/',
+        '--target=flutter',
+        '--aot',
+        '--tfa',
+        '-Ddart.vm.product=true',
+        '--packages',
+        repo.path('.dart_tool/package_config.json'),
+        '--output-dill',
+        dill,
+        'package:tempo/main.dart',
+      ],
+      workingDirectory: repo.path('app'),
+    );
     await runner.run(gen, [
       '--deterministic',
       '--snapshot_kind=app-aot-elf',
