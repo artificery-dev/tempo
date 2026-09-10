@@ -63,7 +63,7 @@ void main() {
   }
 
   Future<void> accelerate(WidgetTester tester) async {
-    for (var i = 0; i < 11; i++) {
+    for (var i = 0; i < 5; i++) {
       await jog(tester, delay: 150);
     }
   }
@@ -96,7 +96,7 @@ void main() {
   ) async {
     await pump(tester, alphabetical: true, count: 200);
     await accelerate(tester);
-    expect(selected, 10);
+    expect(selected, 4);
     final overlay = find.byKey(const ValueKey('WheelList.letters'));
     final scrollable = tester.state<ScrollableState>(
       find.byType(Scrollable).first,
@@ -105,19 +105,19 @@ void main() {
     await jog(tester);
     await jog(tester, delay: 250);
     await jog(tester, amount: -1, delay: 250);
-    expect(selected, 10);
+    expect(selected, 4);
     expect(scrollable.position.pixels, offset);
     await tester.pump(const Duration(milliseconds: 990));
     expect(overlay, findsOneWidget);
-    expect(selected, 10);
+    expect(selected, 4);
     await tester.pump(const Duration(milliseconds: 10));
-    expect(selected, 40);
-    expect(scrollable.position.pixels, greaterThan(offset));
+    expect(selected, 20);
+    expect(scrollable.position.pixels, selected * 20);
     expect(overlay, findsOneWidget);
     await tester.pumpAndSettle();
     expect(overlay, findsNothing);
     await jog(tester);
-    expect(selected, 41);
+    expect(selected, 21);
     expect(tester.takeException(), isNull);
   });
 
@@ -127,13 +127,13 @@ void main() {
     await pump(tester, alphabetical: true);
     await accelerate(tester);
     await jog(tester);
-    expect(selected, 10);
+    expect(selected, 4);
     wheel.press(WheelButton.select);
     await tester.pumpAndSettle();
-    expect(selected, 40);
+    expect(selected, 20);
     expect(activated, -1);
     wheel.press(WheelButton.select);
-    expect(activated, 40);
+    expect(activated, 20);
   });
 
   testWidgets('overlay has one neighbor per side and a larger primary letter', (
@@ -144,13 +144,13 @@ void main() {
     await jog(tester, amount: 3);
     await tester.pump(WheelList.modeTransition);
     final overlay = find.byKey(const ValueKey('WheelList.letters'));
-    for (final letter in ['D', 'E', 'F']) {
+    for (final letter in ['C', 'D', 'E']) {
       expect(
         find.descendant(of: overlay, matching: find.text(letter)),
         findsOneWidget,
       );
     }
-    for (final letter in ['C', 'G']) {
+    for (final letter in ['B', 'F']) {
       expect(
         find.descendant(of: overlay, matching: find.text(letter)),
         findsNothing,
@@ -164,8 +164,8 @@ void main() {
       find.descendant(of: overlay, matching: find.byType(Surface)),
       findsOneWidget,
     );
-    final label = tester.widget<Text>(find.text('E'));
-    final theme = ThemeProvider.of(tester.element(find.text('E')));
+    final label = tester.widget<Text>(find.text('D'));
+    final theme = ThemeProvider.of(tester.element(find.text('D')));
     expect(
       label.style?.fontSize,
       (theme.typography.display.fontSize ?? 20) * 2.4,
@@ -179,7 +179,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pump(WheelList.accelerationIdle);
     await tester.pumpAndSettle();
-    expect(selected, 80);
+    expect(selected, 60);
   });
 
   testWidgets(
@@ -206,22 +206,22 @@ void main() {
       await pump(tester, alphabetical: true);
       await jog(tester);
       for (var i = 0; i < 4; i++) {
-        await jog(tester, delay: 300, amount: i == 2 ? -1 : 1);
+        await jog(tester, delay: 100, amount: i == 2 ? -1 : 1);
       }
       expect(find.byKey(const ValueKey('WheelList.letters')), findsNothing);
-      // The last reversal was at 1200 ms. The original 1500 ms deadline
+      // The last reversal was at 400 ms. The original 600 ms deadline
       // must not open letter mode; this direction needs its own full run.
-      for (var i = 0; i < 4; i++) {
-        await jog(tester, delay: 300);
+      for (var i = 0; i < 5; i++) {
+        await jog(tester, delay: 100);
         expect(find.byKey(const ValueKey('WheelList.letters')), findsNothing);
       }
       final before = selected;
-      await jog(tester, delay: 300);
+      await jog(tester, delay: 100);
       expect(find.byKey(const ValueKey('WheelList.letters')), findsOneWidget);
       expect(selected, before);
       await tester.pump(WheelList.accelerationIdle);
       await tester.pumpAndSettle();
-      expect(selected, 20);
+      expect(selected, 0);
     },
   );
 
@@ -230,7 +230,7 @@ void main() {
   ) async {
     await pump(tester, alphabetical: true);
     await jog(tester);
-    await jog(tester, delay: 750);
+    await jog(tester, delay: 250);
     await tester.pump(const Duration(milliseconds: 800));
     expect(find.byKey(const ValueKey('WheelList.letters')), findsNothing);
     await tester.pump(WheelList.accelerationIdle);
@@ -247,9 +247,9 @@ void main() {
     enabled.value = false;
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('WheelList.letters')), findsNothing);
-    expect(selected, 10);
+    expect(selected, 4);
     await jog(tester, page: true);
-    expect(selected, 11);
+    expect(selected, 5);
   });
 
   testWidgets(
@@ -264,7 +264,7 @@ void main() {
       await accelerate(tester);
       await jog(tester, amount: -100);
       await jog(tester, amount: -1);
-      expect(selected, 90);
+      expect(selected, 84);
       await tester.pump(WheelList.accelerationIdle);
       await tester.pumpAndSettle();
       expect(selected, 0);

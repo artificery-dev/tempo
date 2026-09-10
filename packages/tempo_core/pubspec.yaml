@@ -53,9 +53,9 @@ dependencies:
   # One libc call before libmpv is made: setlocale(LC_NUMERIC, "C").
   ffi: ^2.1.0
   # Published widgets-layer design system; no desktop plugin on the device.
-  tomeui: ^0.3.0
+  tomeui: ^0.3.1
   # The device's grammar: wheel jogs, ring buttons, power chords, WheelList.
-  tomeui_clickwheel: ^0.3.0
+  tomeui_clickwheel: ^0.3.1
   video_player: ^2.14.0
 
 dev_dependencies:

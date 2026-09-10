@@ -23,7 +23,7 @@ dependencies:
   tempo_core:
     path: ../packages/tempo_core
   # Published widgets-layer design system; no desktop plugin on the device.
-  tomeui: ^0.3.0
+  tomeui: ^0.3.1
   # Seamless boot: hand the panel off from the plymouth splash at our first
   # frame (paired with the native flutter-pi plugin).
   flutter_pi_plymouth_handoff:

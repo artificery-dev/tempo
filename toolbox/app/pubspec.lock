@@ -49,6 +49,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.0"
+  cadence_client:
+    dependency: transitive
+    description:
+      path: "../../packages/cadence_client"
+      relative: true
+    source: path
+    version: "1.0.0"
   cadence_media:
     dependency: transitive
     description:
@@ -984,26 +991,26 @@ packages:
     dependency: "direct main"
     description:
       name: tomeui
-      sha256: "9b44205fc40d38317b329b31126b7a11a793269d74ce45334a019c1be889680f"
+      sha256: ceb540e293d34aae9a17f10c145a7f8890a975ed7528b727d811ef673a5c7cd2
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.0"
+    version: "0.3.1"
   tomeui_clickwheel:
     dependency: "direct main"
     description:
       name: tomeui_clickwheel
-      sha256: "7a2119d3977483a6777e27f264325730331f9384360399116479d7789c463e1e"
+      sha256: "9772f884521f5b7c9d3172375cd60c4e0b9b768b91e2e6d3f68fa31f3a3d2b5c"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.0"
+    version: "0.3.1"
   tomeui_desktop:
     dependency: "direct main"
     description:
       name: tomeui_desktop
-      sha256: "14d4acb485c33b331d0079ddd8d66ae8117a3cf57bbadbb035eb332265d32440"
+      sha256: bc5c5089c405eb714d9a70d8d39ea580121a1b830db6ecc8f54539664db02d50
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.0"
+    version: "0.3.1"
   toolbox_core:
     dependency: "direct main"
     description:
