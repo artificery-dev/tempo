@@ -33,19 +33,21 @@ class _Transport implements MediaTransport {
     if (unavailable) throw StateError('Card is unavailable');
     if (method != 'get') mutations.add(path);
     if (path == '/volume') return volume;
-    if (path == '/libraries')
+    if (path == '/libraries') {
       return {
         'libraries': [
           {'id': 1, 'uuid': 'music', 'name': 'Music', 'type': 'music'},
         ],
       };
-    if (path.endsWith('/roots'))
+    }
+    if (path.endsWith('/roots')) {
       return {
         'roots': [
           {'id': 1, 'path': '/Music'},
         ],
       };
-    if (path.endsWith('/tracks'))
+    }
+    if (path.endsWith('/tracks')) {
       return {
         'tracks': [
           for (var i = 0; i < items; i++)
@@ -57,7 +59,8 @@ class _Transport implements MediaTransport {
             },
         ],
       };
-    if (path.endsWith('/items'))
+    }
+    if (path.endsWith('/items')) {
       return {
         'items': [
           for (var i = 0; i < items; i++)
@@ -74,6 +77,7 @@ class _Transport implements MediaTransport {
             },
         ],
       };
+    }
     if (path.endsWith('/scan')) {
       if (method == 'post') scanRunning = true;
       return {
@@ -81,7 +85,7 @@ class _Transport implements MediaTransport {
         if (method == 'post') 'jobId': 'job',
       };
     }
-    if (path == '/media/resolve')
+    if (path == '/media/resolve') {
       return {
         'libraryUuid': body!['libraryUuid'],
         'itemId': body['itemId'],
@@ -89,6 +93,7 @@ class _Transport implements MediaTransport {
         'generation': generation,
         'path': '/proc/42/fd/7/Music/song.flac',
       };
+    }
     throw StateError('Unexpected $method $path');
   }
 

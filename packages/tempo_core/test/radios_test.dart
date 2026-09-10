@@ -2,7 +2,6 @@ import 'package:tempod/src/services/host_radios.dart';
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tempo_core/src/services/radios.dart';
-import 'package:tempo_core/src/services/readings.dart';
 
 void main() {
   test('mock connect, forget and power update status and lists', () async {

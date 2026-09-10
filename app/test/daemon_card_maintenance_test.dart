@@ -5,7 +5,7 @@ import 'package:daemon_client/daemon_client.dart'
     show DeviceClient, DeviceSnapshot, StorageClient;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tempo_core/tempo_core.dart';
-import '../lib/src/daemon_card_maintenance.dart';
+import 'package:tempo/src/daemon_card_maintenance.dart';
 
 class Transport implements MediaTransport {
   @override

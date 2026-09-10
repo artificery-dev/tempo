@@ -52,8 +52,9 @@ class _Transport implements MediaTransport {
     final parts = path.split('/');
     final id = int.parse(parts[2]);
     if (parts[3] == 'roots') {
-      if (method == 'get')
+      if (method == 'get') {
         return {'roots': roots.where((r) => r['libraryId'] == id).toList()};
+      }
       if (method == 'delete') {
         roots.removeWhere((r) => r['id'] == int.parse(parts[4]));
         ready = false;

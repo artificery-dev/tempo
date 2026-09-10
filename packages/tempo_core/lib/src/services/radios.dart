@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'package:daemon_client/daemon_client.dart';
-import 'readings.dart';
 
 export 'package:daemon_client/src/radio_backend.dart';
 

@@ -134,11 +134,12 @@ class _PowerDialogState extends State<PowerDialog> {
       await PowerDialog.perform(command);
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _busy = false;
           _error = '$error';
         });
+      }
     }
   }
 

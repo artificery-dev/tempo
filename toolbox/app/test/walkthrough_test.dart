@@ -53,8 +53,9 @@ class DiagnosticEngine extends WalkthroughEngine {
   Future<void> stop() async {
     stops++;
     await stoppingDone.future;
-    if (!pending.isCompleted)
+    if (!pending.isCompleted) {
       pending.complete({'event': 'cancelled', 'message': 'Operation stopped.'});
+    }
   }
 }
 

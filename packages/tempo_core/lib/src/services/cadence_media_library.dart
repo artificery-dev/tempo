@@ -63,7 +63,7 @@ class CadenceMediaLibrary implements CollectionLibrary {
 
   @override
   LibraryRoots? get locations =>
-      () => [if (_mediaBase != null) _mediaBase!];
+      () => [?_mediaBase];
   // These preferences are persisted through SettingsClient and acted on by the
   // headless host; the UI never schedules a second startup/arrival scan.
   @override
@@ -140,8 +140,9 @@ class CadenceMediaLibrary implements CollectionLibrary {
       }
       final declaration = await client.volume();
       if (declaration['id'] != volume.id ||
-          declaration['generation'] != volume.generation)
+          declaration['generation'] != volume.generation) {
         return;
+      }
       final mediaBase = declaration['resolvedMediaRoot'];
       if (declaration['pathStyle'] != 'volume-posix' ||
           mediaBase is! String ||

@@ -58,10 +58,11 @@ void main() {
       event: (_) {},
       run: (request) async {
         runs.add(request);
-        if (rejectSafely)
+        if (rejectSafely) {
           throw TempoDatastoreMoveRejected(
             'Destination contains an active library',
           );
+        }
         if (fail) throw StateError('interrupted after source retirement');
         fs.directory(request.destination).createSync(recursive: true);
       },
