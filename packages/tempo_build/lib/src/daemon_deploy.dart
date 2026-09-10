@@ -52,10 +52,11 @@ Future<VerifiedDaemonBundle> verifyDaemonBundle(String directory) async {
       );
     hashes[relative] = expected;
   }
+  // No SQLite here any more: the media database left with the embedded
+  // scanner, and cadenced brings its own copy in its own bundle.
   for (final required in [
     'bin/tempod',
     'bin/tempod-native',
-    'lib/libsqlite3.so',
     'lib/libtempod_native.so',
   ]) {
     if (!hashes.containsKey(required))
