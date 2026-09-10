@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show FileSystemException;
 
 import 'package:tomeui/tomeui.dart';
+import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
 
 import '../appearance.dart';
 import '../debug_menu.dart';
@@ -400,6 +401,10 @@ abstract final class PlayerSettings {
         .value
         .copyWith(acceleration: change.to == true),
     'wheel.sensitivity': (change) => WheelSettings.setFirmness('${change.to}'),
+    'wheel.letterEntry': (change) => WheelSettings.letterEntry.value =
+        WheelSettings.millis(change.to, WheelList.letterEntry),
+    'wheel.letterIdle': (change) => WheelSettings.letterIdle.value =
+        WheelSettings.millis(change.to, WheelList.accelerationIdle),
 
     'time.hour': (change) => ClockFormat.hour24.value = change.to != 12,
     'time.zone': (change) {

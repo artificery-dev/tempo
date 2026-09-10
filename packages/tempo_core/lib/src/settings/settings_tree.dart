@@ -548,6 +548,32 @@ const _controls = SettingNode.group(
           bind: 'wheel.acceleration',
           defaultValue: true,
         ),
+        SettingNode.choice(
+          id: 'letters-after',
+          label: 'Letters After',
+          summary: 'How long to scroll one way before the letters open',
+          bind: 'wheel.letterEntry',
+          defaultValue: 600,
+          options: [
+            SettingOption(value: 300, label: '0.3 s'),
+            SettingOption(value: 600, label: '0.6 s'),
+            SettingOption(value: 1000, label: '1 s'),
+            SettingOption(value: 1500, label: '1.5 s'),
+          ],
+        ),
+        SettingNode.choice(
+          id: 'letters-close',
+          label: 'Letters Close',
+          summary: 'How long the letters stay after the wheel stops',
+          bind: 'wheel.letterIdle',
+          defaultValue: 1000,
+          options: [
+            SettingOption(value: 500, label: '0.5 s'),
+            SettingOption(value: 1000, label: '1 s'),
+            SettingOption(value: 2000, label: '2 s'),
+            SettingOption(value: 3000, label: '3 s'),
+          ],
+        ),
         SettingNode.toggle(
           id: 'reverse',
           label: 'Reverse Direction',

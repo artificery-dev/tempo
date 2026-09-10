@@ -288,6 +288,26 @@ void main() {
     expect(WheelSettings.feel.value.acceleration, isTrue);
   });
 
+  test('the letter timing settings update the shared wheel timings', () {
+    final settings = Settings(tree: playerSettingsTree);
+    SettingBindings.registerAll(PlayerSettings.sinks(PlayerServices.fallback));
+    final bridge = SettingsBridge(settings: settings)..attach();
+    addTearDown(() {
+      bridge.detach();
+      settings.dispose();
+      SettingBindings.clear();
+      WheelSettings.letterEntry.value = WheelList.letterEntry;
+      WheelSettings.letterIdle.value = WheelList.accelerationIdle;
+    });
+    settings.set('/settings/controls/wheel/letters-after', 1500);
+    expect(WheelSettings.letterEntry.value, const Duration(milliseconds: 1500));
+    settings.set('/settings/controls/wheel/letters-close', 3000);
+    expect(WheelSettings.letterIdle.value, const Duration(seconds: 3));
+    // Nonsense leaves the defaults in place.
+    settings.set('/settings/controls/wheel/letters-close', 'soon');
+    expect(WheelSettings.letterIdle.value, WheelList.accelerationIdle);
+  });
+
   test('library letters use the same article handling as sorting', () {
     expect(MusicShelf.sectionOf('The Beatles'), 'B');
     expect(MusicShelf.sectionOf('An Artist'), 'A');

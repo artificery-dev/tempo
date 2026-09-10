@@ -993,26 +993,26 @@ packages:
     dependency: "direct main"
     description:
       name: tomeui
-      sha256: ceb540e293d34aae9a17f10c145a7f8890a975ed7528b727d811ef673a5c7cd2
+      sha256: "025a7e893f0a6fa20b4260d66257002cbe23b8ccb84e80d96bd767d42687e6a2"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.1"
+    version: "0.3.2"
   tomeui_clickwheel:
     dependency: "direct main"
     description:
       name: tomeui_clickwheel
-      sha256: "9772f884521f5b7c9d3172375cd60c4e0b9b768b91e2e6d3f68fa31f3a3d2b5c"
+      sha256: "86391bf6d674b16429e65b662ae60745c456dc97b1fbd48f53f397e4e3ebd281"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.1"
+    version: "0.3.2"
   tomeui_desktop:
     dependency: "direct main"
     description:
       name: tomeui_desktop
-      sha256: bc5c5089c405eb714d9a70d8d39ea580121a1b830db6ecc8f54539664db02d50
+      sha256: db61297c7fafc11e8c010448592a6ee81b8496e75e7db93dce0109ddfa648baa
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.1"
+    version: "0.3.2"
   toolbox_core:
     dependency: "direct main"
     description:

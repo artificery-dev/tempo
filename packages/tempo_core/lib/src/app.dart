@@ -244,7 +244,12 @@ class _TempoAppState extends State<TempoApp> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([Appearance.theme, WheelSettings.feel]),
+      listenable: Listenable.merge([
+        Appearance.theme,
+        WheelSettings.feel,
+        WheelSettings.letterEntry,
+        WheelSettings.letterIdle,
+      ]),
       // The theme moves whenever the scale does, so the scale read here is
       // always the one the theme was made at.
       builder: (context, _) =>
@@ -302,6 +307,8 @@ class _TempoAppState extends State<TempoApp> {
               },
               child: WheelAcceleration(
                 enabled: WheelSettings.feel.value.acceleration,
+                letterEntry: WheelSettings.letterEntry.value,
+                letterIdle: WheelSettings.letterIdle.value,
                 surfaceBuilder: (context, child) => ListenableBuilder(
                   listenable: Backdropped.changes,
                   builder: (context, _) {
