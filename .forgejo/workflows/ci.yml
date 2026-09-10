@@ -164,6 +164,10 @@ jobs:
       CI: 'true'
       FLUTTER_SUPPRESS_ANALYTICS: 'true'
       DART_SUPPRESS_ANALYTICS: 'true'
+      # The jobs run as root; the runner's filesystem refuses to hand files
+      # to the uids inside Flutter's artifact tarballs, so tar keeps them
+      # ours.
+      TAR_OPTIONS: --no-same-owner
     steps:
       - name: Checkout
         uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -208,6 +212,10 @@ jobs:
       CI: 'true'
       FLUTTER_SUPPRESS_ANALYTICS: 'true'
       DART_SUPPRESS_ANALYTICS: 'true'
+      # The jobs run as root; the runner's filesystem refuses to hand files
+      # to the uids inside Flutter's artifact tarballs, so tar keeps them
+      # ours.
+      TAR_OPTIONS: --no-same-owner
     steps:
       - name: Checkout
         uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
