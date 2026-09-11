@@ -814,11 +814,24 @@ jobs:
           key="$RUNNER_TEMP/asc-key.p8"
           trap 'rm -f "$key"' EXIT
           printf %s "${{ secrets.APP_STORE_CONNECT_KEY_P8_BASE64 }}" | openssl base64 -d -A > "$key"
-          xcrun notarytool submit "$image" \
+          # Keep the submission id so a refusal comes with Apple's reasons,
+          # which only the log carries; the submit output says just "Invalid".
+          submission=$(xcrun notarytool submit "$image" \
             --key "$key" \
             --key-id "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
             --issuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
-            --wait --timeout 30m
+            --wait --timeout 30m 2>&1 | tee /dev/stderr)
+          id=$(printf %s "$submission" | sed -n 's/^ *id: *//p' | head -1)
+          if ! printf %s "$submission" | grep -q 'status: Accepted'; then
+            echo "::group::Notary log for $id"
+            xcrun notarytool log "$id" \
+              --key "$key" \
+              --key-id "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+              --issuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" || true
+            echo "::endgroup::"
+            echo "::error::Apple refused to notarise $(basename "$image"); the log above says why"
+            exit 1
+          fi
           xcrun stapler staple "$image"
           xcrun stapler validate "$image"
           spctl -a -t open --context context:primary-signature -vv "$image"

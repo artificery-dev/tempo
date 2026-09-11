@@ -63,15 +63,44 @@ Future<void> signMacBundle(
     'Contents/MacOS',
     p.basenameWithoutExtension(bundle.path),
   );
+  final flags = [
+    '--force',
+    '--sign',
+    identity,
+    if (distributable) ...['--options', 'runtime', '--timestamp'],
+  ];
+  // `flutter build macos` is an xcodebuild build, not an archive, and Xcode
+  // signs a build's frameworks and libraries without a secure timestamp.
+  // The notary service refuses every one of them for that, so they are
+  // signed again here, innermost first so each seal covers what it holds.
+  final frameworks = Directory(p.join(bundle.path, 'Contents/Frameworks'));
+  if (frameworks.existsSync()) {
+    final libraries =
+        frameworks
+            .listSync(recursive: true, followLinks: false)
+            .whereType<File>()
+            .where(_isMachO)
+            .map((entry) => entry.path)
+            .toList()
+          ..sort((a, b) => p.split(b).length.compareTo(p.split(a).length));
+    for (final library in libraries) {
+      await runner.run('codesign', [...flags, library]);
+    }
+    final bundles =
+        frameworks
+            .listSync(recursive: true, followLinks: false)
+            .whereType<Directory>()
+            .where((entry) => entry.path.endsWith('.framework'))
+            .map((entry) => entry.path)
+            .toList()
+          ..sort((a, b) => p.split(b).length.compareTo(p.split(a).length));
+    for (final framework in bundles) {
+      await runner.run('codesign', [...flags, framework]);
+    }
+  }
   for (final executable in executables) {
     if (executable == main) continue;
-    await runner.run('codesign', [
-      '--force',
-      '--sign',
-      identity,
-      if (distributable) ...['--options', 'runtime', '--timestamp'],
-      executable,
-    ]);
+    await runner.run('codesign', [...flags, executable]);
   }
   await runner.run('codesign', [
     '--force',
