@@ -1040,7 +1040,14 @@ jobs:
             echo "::error::This container is not privileged enough to build a rootfs; it lacks:$missing. The runner has to start job containers with --privileged."
             exit 1
           fi
-          echo "binfmt_misc and loop devices are available"
+          # The container's /dev is its own: loop-control can hand out a
+          # device on the host without a node for it appearing here, and
+          # mount then cannot find it. Make the nodes it may need.
+          for n in 0 1 2 3 4 5 6 7; do
+            [ -e "/dev/loop$n" ] || mknod -m 660 "/dev/loop$n" b 7 "$n"
+          done
+          device=$(losetup -f)
+          echo "binfmt_misc is available and $device is free for the rootfs"
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
       - name: Restore the pinned Flutter SDKs

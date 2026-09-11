@@ -8,6 +8,9 @@
 library;
 
 export 'src/app.dart';
+export 'src/first_run/first_run_flow.dart';
+export 'src/first_run/first_run_state.dart';
+export 'src/text_entry/keyboard_screen.dart';
 export 'src/applet.dart';
 export 'src/appearance.dart';
 export 'src/battery_gauge.dart';

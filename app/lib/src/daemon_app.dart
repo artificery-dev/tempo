@@ -190,7 +190,14 @@ final class _DaemonAppState extends State<DaemonApp> {
 
   @override
   Widget build(BuildContext context) {
-    if (_services case final services?) return TempoApp(services: services);
+    if (_services case final services?) {
+      // Until first run is done, the launcher says so, and the player
+      // opens on its setup instead.
+      if (Platform.environment['TEMPO_FIRST_RUN'] == '1') {
+        return FirstRunApp(services: services);
+      }
+      return TempoApp(services: services);
+    }
     if (_dataStorage case final controller?) {
       return DataStorageRecoveryApp(controller: controller);
     }
