@@ -40,16 +40,15 @@
 # the release path; delete the release and the tag once it has proved itself.
 #
 # A release is the Toolbox (Linux x64 and the macOS disk image) and the
-# firmware image. Not built here: the rootfs and therefore the firmware
-# image (`dist`). The rootfs build needs rootful Podman with binfmt
-# (debootstrap under qemu-arm-static in a chroot on a loop-mounted ext4
-# image), which these container-only runners cannot provide, and the image
-# bakes in the device user's credentials from config.local.yaml. Both
-# become jobs once a privileged (VM-backed) runner exists and the
-# credentials are secrets; until then the firmware is a local `toolbox dev
-# build`, attached to the release by hand. The tempod bundle is built as a
-# check and kept as an artifact, but it ships inside the image, not beside
-# the Toolbox.
+# firmware image. The firmware job builds the rootfs on a loop device with
+# debootstrap under QEMU, so its container runs privileged; the runners
+# allow that. It needs the device user's credentials as the secret
+# TEMPO_CONFIG_LOCAL_YAML, the same config.local.yaml a developer keeps.
+# The tempod bundle is built as a check and kept as an artifact, but it
+# ships inside the image, not beside the Toolbox.
+#
+# A branch push builds only the components it touched (the `changes` job
+# decides); a tag or a manual run builds everything.
 name: CI
 
 "on":
@@ -67,6 +66,76 @@ env:
   DART: /opt/toolbox-test/dart-sdk/bin/dart
 
 jobs:
+  changes:
+    name: Decide what changed
+    # A branch push rebuilds the components it touched; a tag, a manual run
+    # or a push whose parent is unknown rebuilds everything. Changes to the
+    # build tool, the workflow or config.yaml count as everything too.
+    runs-on: linux-amd64-container
+    timeout-minutes: 10
+    outputs:
+      check_app: ${{ steps.decide.outputs.check_app }}
+      check_daemon: ${{ steps.decide.outputs.check_daemon }}
+      check_toolbox: ${{ steps.decide.outputs.check_toolbox }}
+      app: ${{ steps.decide.outputs.app }}
+      daemon: ${{ steps.decide.outputs.daemon }}
+      toolbox: ${{ steps.decide.outputs.toolbox }}
+      platform: ${{ steps.decide.outputs.platform }}
+      firmware: ${{ steps.decide.outputs.firmware }}
+      recovery: ${{ steps.decide.outputs.recovery }}
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Decide
+        id: decide
+        env:
+          BASE: ${{ github.event.before }}
+        run: |
+          set -eu
+          all=false
+          case "$GITHUB_REF" in refs/tags/*) all=true ;; esac
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then all=true; fi
+          if [ "$all" = false ]; then
+            case "$BASE" in
+              ''|0000000000000000000000000000000000000000) all=true ;;
+              *) git cat-file -e "$BASE^{commit}" 2>/dev/null || all=true ;;
+            esac
+          fi
+          files=
+          if [ "$all" = false ]; then
+            files=$(git diff --name-only "$BASE" "$GITHUB_SHA")
+            echo "Changed since $BASE:"; printf '%s\n' "$files" | sed 's/^/  /'
+          else
+            echo "Building everything"
+          fi
+          touched() {
+            [ "$all" = true ] && return 0
+            printf '%s\n' "$files" | grep -qE "$1"
+          }
+          tool='^(packages/tempo_build/|\.forgejo/|config\.yaml$|pubspec\.(yaml|lock)$)'
+          app='^(app/|assets/|packages/(tempo_core|player_api|daemon_client|tempo_logger|flutter_pi_plymouth_handoff)/)'
+          daemon='^(daemon/|packages/(tempo_data|player_api|tempo_logger|daemon_client)/)'
+          toolbox='^(toolbox/|packages/(tempo_usb|toolbox_core|tempo_data|tempo_core|tempo_logger)/)'
+          platform='^(platform/|\.gitmodules$)'
+          flag() { if touched "$tool" || touched "$2"; then echo true; else echo false; fi; }
+          check_app=$(flag app "$app")
+          check_daemon=$(flag daemon "$daemon")
+          check_toolbox=$(flag toolbox "$toolbox")
+          platform=$(flag platform "$platform")
+          either() { if [ "$1" = true ] || [ "$2" = true ]; then echo true; else echo false; fi; }
+          app=$(either "$check_app" "$platform")
+          daemon=$(either "$check_daemon" "$platform")
+          toolbox=$(either "$check_toolbox" "$platform")
+          firmware=$(either "$app" "$daemon")
+          recovery=$(either "$firmware" "$toolbox")
+          for name in check_app check_daemon check_toolbox app daemon toolbox platform firmware recovery; do
+            eval "value=\$$name"
+            echo "$name=$value" | tee -a "$GITHUB_OUTPUT"
+          done
+
   toolchain:
     name: Resolve toolchain image
     runs-on: linux-amd64-container
@@ -165,10 +234,11 @@ jobs:
 
   check-app:
     name: Analyze and test Tempo app
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.check_app == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 60
     container:
@@ -211,10 +281,11 @@ jobs:
 
   check-daemon:
     name: Analyze and test tempod
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.check_daemon == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 60
     container:
@@ -257,10 +328,11 @@ jobs:
 
   check-toolbox:
     name: Analyze and test Toolbox
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.check_toolbox == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
@@ -303,10 +375,11 @@ jobs:
 
   recovery:
     name: Build Recovery images
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.recovery == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 120
     container:
@@ -356,10 +429,11 @@ jobs:
 
   build-daemon:
     name: Build tempod for the Y2
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.daemon == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
@@ -418,10 +492,11 @@ jobs:
     name: Fetch cadenced release
     # Proves the pinned cadenced release is still downloadable and matches
     # its recorded checksum; the firmware build depends on it.
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 15
     container:
@@ -450,7 +525,11 @@ jobs:
 
   build-toolbox:
     name: Build Toolbox for Linux
-    needs: [toolchain, recovery]
+    needs: [changes, toolchain, recovery]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && needs.recovery.result == 'success'
+      && needs.changes.outputs.toolbox == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 120
     container:
@@ -520,10 +599,11 @@ jobs:
     name: Build Tempo app for the Y2
     # The Y2's app: flutter-pi engine binaries, the flutter-pi embedder
     # cross-built for ARM, and the AOT-compiled Flutter bundle.
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.app == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
@@ -581,10 +661,11 @@ jobs:
 
   splash:
     name: Build splash images
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.platform == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 30
     container:
@@ -625,10 +706,11 @@ jobs:
     # zImage, device tree and the initramfs packed into boot.img. Without a
     # rootfs build the initramfs carries no Plymouth payload, so this proves
     # the kernel and its configuration, not the shipping boot image.
-    needs: [toolchain, toolchain-build]
+    needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      && needs.changes.outputs.platform == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 180
     container:
@@ -668,7 +750,10 @@ jobs:
     name: Build Toolbox for macOS
     # Recovery is cross-built in the Linux toolchain container, so the Mac
     # takes its images from that job and only packages them.
-    needs: [recovery]
+    needs: [changes, recovery]
+    if: >-
+      always() && needs.recovery.result == 'success'
+      && needs.changes.outputs.toolbox == 'true'
     runs-on: macos
     timeout-minutes: 120
     env:
@@ -902,9 +987,137 @@ jobs:
           security list-keychains -d user -s login.keychain-db
           security delete-keychain "${{ steps.signing.outputs.keychain }}"
 
+  firmware:
+    name: Build firmware image
+    # The whole `toolbox dev build` sequence, minus the host checks that
+    # assume Podman on the outside: inside the toolchain image, as root,
+    # the build tool runs its container steps directly. Recovery comes
+    # from its own job; everything else is built here so that the image is
+    # made from exactly this commit.
+    needs: [changes, toolchain, recovery]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && needs.recovery.result == 'success'
+      && needs.changes.outputs.firmware == 'true'
+    runs-on: linux-amd64-container
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+      # The rootfs is an ext4 image built on a loop device, populated by
+      # debootstrap running ARM binaries under QEMU through binfmt_misc.
+      # All of that is the kernel's business, so the container has to be
+      # allowed to ask it.
+      options: --privileged
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+          # The kernel and flutter-pi are submodules.
+          submodules: recursive
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
+      - name: Require the privileges a rootfs build needs
+        run: |
+          set -eu
+          echo "uid $(id -u)"
+          if ! grep -q enabled /proc/sys/fs/binfmt_misc/status 2>/dev/null; then
+            mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          fi
+          missing=
+          [ -w /proc/sys/fs/binfmt_misc/register ] || missing="$missing binfmt_misc"
+          [ -e /dev/loop-control ] || missing="$missing /dev/loop-control"
+          if [ -n "$missing" ]; then
+            echo "::error::This container is not privileged enough to build a rootfs; it lacks:$missing. The runner has to start job containers with --privileged."
+            exit 1
+          fi
+          echo "binfmt_misc and loop devices are available"
+      - name: Determine package version
+        run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
+      - name: Write the device credentials
+        # config.local.yaml, the same file a developer keeps: at least a
+        # password or an SSH key for the device user. Kept out of the log.
+        run: |
+          set -eu
+          if [ -z "${{ secrets.TEMPO_CONFIG_LOCAL_YAML }}" ]; then
+            echo "::error::TEMPO_CONFIG_LOCAL_YAML is unset; the image needs the device user's credentials (see config.local.example.yaml)"
+            exit 1
+          fi
+          printf '%s\n' "${{ secrets.TEMPO_CONFIG_LOCAL_YAML }}" > config.local.yaml
+          cd toolbox/cli && "$DART" pub get > /dev/null && "$DART" run bin/toolbox.dart dev os rootfs plan | tail -3
+      - name: Restore the pinned Flutter SDKs
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Provision the pinned Flutter SDKs
+        run: sh .forgejo/sdks.sh
+      - name: Collect Recovery images
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: recovery-images
+          path: build/recovery
+      - name: Resolve the workspace
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get
+      - name: Fetch the flutter-pi engine and build the embedder
+        run: |
+          cd toolbox/cli
+          "$DART" run bin/toolbox.dart dev app flutter-pi engine
+          "$DART" run bin/toolbox.dart dev app flutter-pi build
+      - name: Build the app
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app build --release
+      - name: Build tempod
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev daemon build --target arm
+      - name: Fetch cadenced
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
+      - name: Build the splash
+        run: |
+          cd toolbox/cli
+          "$DART" run bin/toolbox.dart dev os splash assets
+          "$DART" run bin/toolbox.dart dev os splash build
+      - name: Build the Bluetooth bootstrap and the system runtime
+        # On a developer machine the rootfs step does these before entering
+        # its container; here we are already inside it.
+        run: |
+          cd toolbox/cli
+          "$DART" run bin/toolbox.dart dev os bluetooth build
+          "$DART" run bin/toolbox.dart dev os runtime build
+      - name: Build the rootfs
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os rootfs build
+      - name: Build the kernel and boot image
+        # After the rootfs: the initramfs takes Plymouth from it.
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os kernel build
+      - name: Assemble the firmware image
+        run: |
+          set -eu
+          cd toolbox/cli && "$DART" run bin/toolbox.dart dev dist
+          cd "$GITHUB_WORKSPACE"
+          mv build/dist/tempo.y2-firmware "build/dist/tempo-${TEMPO_VERSION}.y2-firmware"
+          ls -la build/dist
+      - name: Save the firmware image
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: tempo-firmware
+          path: build/dist/*.y2-firmware
+          retention-days: 30
+          if-no-files-found: error
+      - name: Forget the device credentials
+        if: always()
+        run: rm -f config.local.yaml
+
   release:
     name: Publish release from tag
-    needs: [check-app, check-daemon, check-toolbox, build-app, build-daemon, build-toolbox, build-toolbox-macos, cadence, splash, kernel]
+    needs: [check-app, check-daemon, check-toolbox, build-app, build-daemon, build-toolbox, build-toolbox-macos, cadence, splash, kernel, firmware]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: linux-amd64-container
     timeout-minutes: 15
@@ -947,6 +1160,11 @@ jobs:
         with:
           name: tempo-toolbox-macos-package
           path: release
+      - name: Collect the firmware image
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: tempo-firmware
+          path: release
       - name: Write checksums
         run: cd release && sha256sum * | tee SHA256SUMS
       - name: Create release with packages attached
@@ -963,6 +1181,5 @@ jobs:
           release-dir: release
           release-notes: >-
             Tempo ${{ github.ref_name }} (${{ github.sha }}): the Toolbox for
-            Linux x64 and macOS. The firmware image (`tempo.y2-firmware`) is
-            built locally with `toolbox dev build` and attached to this
-            release afterwards; its checksum is not in SHA256SUMS.
+            Linux x64 and macOS, and the Y2 firmware image the Toolbox
+            installs.
