@@ -1024,8 +1024,12 @@ jobs:
           spctl -a -t open --context context:primary-signature -vv "$image"
           # The archive below hands out the app on its own, so it wants the
           # ticket too; Apple issues it for the same code the image carried.
-          app=$(ls -d "toolbox/app/build/macos/Build/Products/Release/"*.app | head -1)
-          xcrun stapler staple "$app" || echo "::warning::the app has no notarisation ticket of its own"
+          # The bundle itself gets a ticket too when this run built it; a
+          # disk image restored from the cache has no bundle beside it.
+          app=$(ls -d "toolbox/app/build/macos/Build/Products/Release/"*.app 2>/dev/null | head -1 || true)
+          if [ -n "$app" ]; then
+            xcrun stapler staple "$app" || echo "::warning::the app has no notarisation ticket of its own"
+          fi
       # Waiting on the Slipway deployment: the service on the build host
       # predates its own support for desktop archives and refuses the zip.
       # - name: Package the app for Slipway
