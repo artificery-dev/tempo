@@ -9,6 +9,24 @@ class BuildFailure implements Exception {
   String toString() => message;
 }
 
+/// What the `dart` running this tool tells its children about itself, and
+/// what a child of another SDK must not hear. Dart 3.13's `dart run` exports
+/// `DART_ROOT`; a pinned Flutter SDK's own `dart test` then takes that as
+/// its SDK, finds no Flutter around it, and re-resolves the workspace with
+/// plain pub, which refuses the Flutter packages.
+const _ownSdkVariables = ['DART_ROOT', 'DASH__TOOL'];
+
+/// The environment a child gets: the parent's without the variables above,
+/// then [extra] on top.
+Map<String, String> childEnvironment(
+  Map<String, String> parent, [
+  Map<String, String>? extra,
+]) => {
+  for (final entry in parent.entries)
+    if (!_ownSdkVariables.contains(entry.key)) entry.key: entry.value,
+  ...?extra,
+};
+
 /// Arguments always cross the host process boundary as individual values.
 /// Interactive children inherit stdin; noninteractive input is streamed.
 class CommandRunner {
@@ -24,7 +42,8 @@ class CommandRunner {
       executable,
       arguments,
       workingDirectory: workingDirectory,
-      environment: environment,
+      environment: childEnvironment(Platform.environment, environment),
+      includeParentEnvironment: false,
       mode: input == null
           ? ProcessStartMode.inheritStdio
           : ProcessStartMode.normal,
@@ -74,7 +93,8 @@ class CommandRunner {
       executable,
       arguments,
       workingDirectory: workingDirectory,
-      environment: environment,
+      environment: childEnvironment(Platform.environment, environment),
+      includeParentEnvironment: false,
     );
     if (check && result.exitCode != 0) {
       throw BuildFailure('$executable: ${result.stderr}', result.exitCode);
