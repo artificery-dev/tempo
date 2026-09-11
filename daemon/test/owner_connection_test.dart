@@ -108,16 +108,18 @@ void main() {
         await server.close();
         await eventually(() => readiness.last == false);
         expect(proxy.snapshot.available, isFalse);
-        server = PlayerServer(
-          player: proxy,
-          token: 'remote-token',
-          ownerToken: 'owner-token',
-        );
         // The owner reconnects to the address it knows, so the new server has
         // to take the old one's port back. The kernel can still be holding it
-        // for a moment after the close, which is not a failure to bind.
+        // for a moment after the close, which is not a failure to bind; a
+        // server that failed to start cannot be started again, so each try
+        // is a new one.
         final rebind = DateTime.now().add(const Duration(seconds: 60));
         while (true) {
+          server = PlayerServer(
+            player: proxy,
+            token: 'remote-token',
+            ownerToken: 'owner-token',
+          );
           try {
             await server.start(port: port);
             break;
