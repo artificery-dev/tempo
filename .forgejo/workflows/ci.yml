@@ -39,13 +39,17 @@
 # and must sit on the ci branch. Move `ci-test` and push it again to exercise
 # the release path; delete the release and the tag once it has proved itself.
 #
-# Not built here: the rootfs and therefore the firmware image (`dist`). The
-# rootfs build needs rootful Podman with binfmt (debootstrap under
-# qemu-arm-static in a chroot on a loop-mounted ext4 image), which these
-# container-only runners cannot provide, and the image bakes in the device
-# user's credentials from config.local.yaml. Both become jobs once a
-# privileged (VM-backed) runner exists and the credentials are secrets;
-# until then the firmware remains a local `toolbox dev build`.
+# A release is the Toolbox (Linux x64 and the macOS disk image) and the
+# firmware image. Not built here: the rootfs and therefore the firmware
+# image (`dist`). The rootfs build needs rootful Podman with binfmt
+# (debootstrap under qemu-arm-static in a chroot on a loop-mounted ext4
+# image), which these container-only runners cannot provide, and the image
+# bakes in the device user's credentials from config.local.yaml. Both
+# become jobs once a privileged (VM-backed) runner exists and the
+# credentials are secrets; until then the firmware is a local `toolbox dev
+# build`, attached to the release by hand. The tempod bundle is built as a
+# check and kept as an artifact, but it ships inside the image, not beside
+# the Toolbox.
 name: CI
 
 "on":
@@ -930,11 +934,9 @@ jobs:
             exit 1
           fi
           echo "$GITHUB_REF_NAME is on $branch"
-      - name: Collect the tempod package
-        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
-        with:
-          name: tempod-package
-          path: release
+      # A release is the Toolbox and the firmware image. tempod ships inside
+      # the image, so its bundle is a build check and a debugging artifact,
+      # not something a person installs on its own.
       - name: Collect the Toolbox package
         uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
         with:
@@ -961,5 +963,6 @@ jobs:
           release-dir: release
           release-notes: >-
             Tempo ${{ github.ref_name }} (${{ github.sha }}): the Toolbox for
-            Linux x64 and macOS, and the tempod bundle for the Y2 (armhf).
-            The firmware image is built locally with `toolbox dev build`.
+            Linux x64 and macOS. The firmware image (`tempo.y2-firmware`) is
+            built locally with `toolbox dev build` and attached to this
+            release afterwards; its checksum is not in SHA256SUMS.
