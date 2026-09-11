@@ -114,7 +114,7 @@ error. The first argument selects the operation:
 | Arguments | Operation |
 | --- | --- |
 | `probe [wait-seconds]` | Handshake and chip report; waits 30 seconds by default, at most 300. |
-| `recovery probe`, `recovery backup FILE`, `recovery restore FILE`, `recovery flash FILE` | The recovery workflows, with `--allow-preloader`, `--resume`, `--no-verify` and `--no-reboot`. |
+| `recovery probe`, `recovery backup FILE`, `recovery restore FILE`, `recovery flash FILE` | The recovery workflows, with `--allow-preloader`, `--resume`, `--no-verify` and `--no-reboot`. `recovery flash` also takes `--setup FILE`, a JSON object of first-run choices (`username`, `password`, `hostname`, `pretty_hostname`, `timezone`, `locale`, `ssh_keys`) written into the flashed root filesystem with the password hashed. |
 | `backup DA-file OUT.img.gz` | Legacy agent backup, captured in 64 MiB chunks into `OUT.img.gz.resume` beside the output and published as one gzip stream when complete. |
 | `backup-resume DA-file LEGACY-DIR OUT.gz` | Resume a vendor-format capture from its `backup.json` sidecar. |
 | `restore DA-file BACKUP [--allow-preloader]`, `flash DA-file PACKAGE [--allow-preloader]` | Stage and hash the input, then write with read-back. `--resume` compares first and `--no-verify` skips read-back. |
@@ -157,8 +157,9 @@ time with a thirty second timeout.
 
 `Client` frames every command with the 48-byte `TEMPREC1` header, checks the
 response opcode, size and CRC-32, and turns a non-zero status into an error. `info` records whether the service supports
-`CONTEXT`, `FILL` and `REBOOT`, so an older recovery build degrades to plain
-writes and a manual restart. `set_context` limits the title to 63 printable
+`CONTEXT`, `FILL`, `REBOOT`, `SETUP` and `TIME`, so an older recovery build
+degrades to plain writes, a manual restart, no device setup and an unset
+clock. `set_context` limits the title to 63 printable
 bytes and the detail to 95. Transfers send `FILL` for a chunk that repeats
 one four-byte pattern, sample throughput for progress, and send `CANCEL` on
 any error or when the cancellation flag is raised. The frame layout and the

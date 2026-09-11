@@ -66,8 +66,8 @@ SPFT ROM · Preloader excluded**; see
 
 ## Options
 
-The **Options** step has two switches in plain view and more under
-**Advanced**.
+The **Options** step has two switches in plain view, a collapsed **Device
+Setup** section, and more under **Advanced**.
 
 | Option | Default | What it does |
 | --- | --- | --- |
@@ -76,6 +76,15 @@ The **Options** step has two switches in plain view and more under
 | Legacy Download Agent | Off | Use the slower legacy transfer method without starting Tempo Recovery. |
 | Skip matching data | Off | Read each range first and skip it only if every byte already matches. Desktop only. |
 | Allow preloader flashing | Off | Lets the package write the preloader region. Requires the acknowledgement below. |
+
+**Device Setup** appears on the desktop when the flash goes through Tempo
+Recovery. Fill in any or all of the account name, password, device name,
+time zone, language and SSH public keys and the player will not ask for
+them on its first start; whatever is left blank, it asks for there. Each
+box applies the player's own rules as you type. The password reaches the
+player only as a hash, and the player's clock is set from your computer on
+every Recovery flash, whether or not the section is used. The review step
+lists what was filled in.
 
 Readback verification means that after each range is written, Toolbox reads
 the same range back from the chip and compares it with the image it sent. It

@@ -175,6 +175,8 @@ payload of at most 1 MiB. Both ends give a stalled transfer thirty seconds.
 | 9 | `CONTEXT` | Set the title and detail the screen shows for the next transfer. |
 | 10 | `FILL` | Write a chunk that repeats a four-byte pattern, sent as four bytes. |
 | 11 | `REBOOT` | Sync and restart the player; refused during a transfer. |
+| 12 | `SETUP` | Write the payload to `/first-run-config.json` in the Tempo root filesystem; refused during a transfer. |
+| 13 | `TIME` | Set the system and hardware clocks to the UTC seconds in `offset`; refused during a transfer. |
 
 A `BEGIN` requires no open transfer, a region of 0 to 2, a non-zero length,
 512-byte alignment of offset and length, a range inside the device's reported
@@ -198,6 +200,16 @@ in the host workflow: packages and backups are checked against their manifest
 SHA-256 before USB is opened, and `flash --resume` reads each partition back
 and skips those already matching.
 
+`SETUP` is the one request that mounts storage. The host names the offset
+and length of the `rootfs` mapping it flashed; the service re-reads the
+partition table, requires the first partition to start at that offset and be
+at least that long, clears the read-only flags, mounts it as ext4 for this
+request alone, writes the payload (at most 64 KiB, no NUL bytes) as a file
+only root can read, unmounts, syncs and sets the flags again. A foreign
+image, whose first partition is elsewhere or missing, is left untouched.
+`TIME` takes seconds between 2020 and 2100, calls `settimeofday` and sets
+`/dev/rtc0`. `INFO` advertises both as `setup` and `time`.
+
 Any failure reply syncs an open write, closes the disk, publishes an error to
 the screen and returns status 1 with the message as payload. A malformed
 frame, a timeout or a lost host ends the session; the service syncs, closes,
@@ -218,8 +230,15 @@ a zeroed RPMB gap, then the user area. Restore and flash prepare the package
 first, build the write plan, and order the preloader write last; that write
 needs `--allow-preloader`, exactly one mapping and a valid preloader header.
 Each partition is written under a screen context such as `Flashing boot` with
-`Partition 2/5 - write + readback verification`. When the work is done the
-host sends `REBOOT` unless `--no-reboot` was given.
+`Partition 2/5 - write + readback verification`. A flash given `--setup FILE`
+reads first-run choices from that file before USB is opened, checks them the
+way the player will (`platform/rootfs/tool/first_run.dart`), replaces the
+password with its sha512-crypt hash, and after the last partition sends them
+as `SETUP` for the package's `rootfs` mapping; a package without one refuses
+the flag. Every flash and restore then sends `TIME` with the host's clock, so
+the player boots knowing the time; a recovery too old to offer it is left
+alone. When the work is done the host sends `REBOOT` unless `--no-reboot`
+was given.
 
 ## The display and charging
 
