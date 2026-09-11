@@ -1047,7 +1047,27 @@ jobs:
             [ -e "/dev/loop$n" ] || mknod -m 660 "/dev/loop$n" b 7 "$n"
           done
           device=$(losetup -f)
-          echo "binfmt_misc is available and $device is free for the rootfs"
+          # debootstrap's second stage runs ARM programs through QEMU, which
+          # the kernel only does once Debian's qemu-arm definition is
+          # registered - the same registration the developer path makes
+          # from its own privileged container. Never replace one that is
+          # there; enable it if it is only disabled.
+          binfmt=/proc/sys/fs/binfmt_misc
+          if [ -e "$binfmt/qemu-arm" ]; then
+            if grep -q '^disabled$' "$binfmt/qemu-arm"; then echo 1 > "$binfmt/qemu-arm"; fi
+          else
+            grep -q '^fix_binary yes$' /usr/share/binfmts/qemu-arm
+            update-binfmts --import qemu-arm
+            update-binfmts --enable qemu-arm
+          fi
+          # Prove it the way debootstrap will use it: an ARM shell in a chroot.
+          work=$(mktemp -d)
+          cp platform/rootfs/initramfs/busybox/busybox-armv7l "$work/busybox"
+          cp /usr/bin/qemu-arm-static "$work/qemu-arm-static"
+          chmod 755 "$work/busybox" "$work/qemu-arm-static"
+          chroot "$work" /busybox sh -c '/busybox true'
+          rm -rf "$work"
+          echo "binfmt_misc runs ARM programs and $device is free for the rootfs"
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
       - name: Restore the pinned Flutter SDKs
