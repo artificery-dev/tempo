@@ -2,7 +2,7 @@
 /// Entries describe the implemented parsers, including forwarded arguments.
 const developerCommands = <String, (String, String)>{
   'bootstrap': (
-    '[--config FILE] [--build]',
+    '[--build]',
     'Prepare a clean Linux x64 checkout for a complete firmware build.\n'
         'Provision submodules, firmware blobs, pinned SDKs, dependencies, toolchain and CLI.\n'
         '--config imports local settings; existing inputs are preserved.\n'
@@ -264,32 +264,17 @@ const developerCommands = <String, (String, String)>{
     'Package the existing kernel, splash and rootfs into an installer .y2-firmware and checksummed SPFT distribution.\n--full also selects stock boot-chain images; the installer always preserves BOOT1.\nDefault preserves preloader/LK/NVRAM. --with-rootfs is accepted for compatibility; rootfs is already required/included.',
   ),
   'config get': (
-    'KEY [--raw]',
+    'KEY',
     'Print a scalar configuration value. This command prints the selected value directly.',
   ),
   'config list': (
-    'KEY [--raw]',
+    'KEY',
     'Print a configured list, one item per line; values are printed directly.',
   ),
-  'config json': (
-    '[KEY] [--raw]',
-    'Print configuration as JSON, redacted by default; --raw includes secret values.',
-  ),
+  'config json': ('[KEY]', 'Print configuration as JSON.'),
   'config has': (
-    '[KEY] [--raw]',
+    '[KEY]',
     'Exit 0 for a present/nonempty configuration value, 1 for missing or empty; no output.',
-  ),
-  'secrets status': (
-    '',
-    'Report local configuration and password/key presence without printing credentials.',
-  ),
-  'secrets hash': (
-    '',
-    'Hash a configured plaintext local password using OpenSSL stdin and update file permissions.',
-  ),
-  'secrets is-hashed': (
-    '',
-    'Exit 0 if the configured password already has a recognized crypt hash, otherwise 1.',
   ),
 };
 

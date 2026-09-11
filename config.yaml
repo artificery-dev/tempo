@@ -1,9 +1,8 @@
 # Tempo workspace configuration.
 #
-# Every build script reads this file. Secrets do not live here: this file is
-# tracked and the repository is public. Put the default user's password and SSH
-# keys in config.local.yaml, which is gitignored and deep-merged over this one.
-# See config.local.example.yaml, and run `just secrets hash` once you have.
+# Every build script reads this file. No secret lives here or anywhere in the
+# build: the image ships its user account locked, and the device's first run
+# (or the flasher's first-run configuration) sets the password and keys.
 
 # Tempo's release version: the Toolbox, the daemon and the firmware ship
 # together under it. A `v<version>` tag on main must match it (CI refuses
@@ -86,8 +85,7 @@ user:
     # (the group is pipewire's).
     - pipewire
 
-  # password and ssh_keys come from config.local.yaml. A build with neither
-  # configured fails rather than shipping a guessable credential.
+  # No password or key is baked in; the account is locked until first run.
 
 shell:
   # Install Oh My Zsh into the image. Installed per user, into each home

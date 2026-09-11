@@ -44,8 +44,7 @@ const developerHelp = """toolbox dev [--repo PATH] <area> <action> [arguments]
   device flash-boot|flash-logo|install-rootfs
   toolchain build|rebuild|run|shell|info|clean
   dist [--full] [--with-rootfs]
-  config get|list|json|has [key] [--raw]
-  secrets status|hash|is-hashed
+  config get|list|json|has [key]
 """;
 
 Future<int> runDeveloperCommand(
@@ -89,8 +88,6 @@ Future<int> runDeveloperCommand(
     }
     if (area == 'config')
       return configCommand(BuildConfig.load(repository), action, args);
-    if (area == 'secrets')
-      return await secretsCommand(repository, runner, action, args);
     if (area == 'toolchain') {
       final toolchain = Toolchain(repository, runner);
       if (action == 'clean')
@@ -203,7 +200,6 @@ Future<int> runDeveloperCommand(
 }
 
 int configCommand(BuildConfig config, String action, List<String> args) {
-  final raw = args.remove('--raw');
   if (args.length > 1) throw BuildFailure('Expected one configuration key', 2);
   final key = args.firstOrNull;
   final sentinel = Object();
@@ -216,11 +212,7 @@ int configCommand(BuildConfig config, String action, List<String> args) {
   }
   switch (action) {
     case 'json':
-      stdout.writeln(
-        const JsonEncoder.withIndent(
-          '  ',
-        ).convert(raw ? value : config.redacted(key)),
-      );
+      stdout.writeln(const JsonEncoder.withIndent('  ').convert(value));
       return 0;
     case 'get':
       if (key == null || value is Map || value is List)
@@ -244,81 +236,6 @@ int configCommand(BuildConfig config, String action, List<String> args) {
     default:
       throw BuildFailure('Expected config get, list, json, or has', 2);
   }
-}
-
-final cryptPattern = RegExp(r'^\$(y|gy|7|2[abxy]|6|5|1)\$');
-Future<int> secretsCommand(
-  Repository repository,
-  CommandRunner runner,
-  String action,
-  List<String> args,
-) async {
-  if (args.isNotEmpty) throw BuildFailure('Unexpected secrets arguments', 2);
-  final local = File(repository.path('config.local.yaml'));
-  final config = BuildConfig.load(repository, expandKeys: false);
-  final password = config.get('user.password')?.toString() ?? '';
-  if (action == 'is-hashed') return cryptPattern.hasMatch(password) ? 0 : 1;
-  if (action == 'status' || action.isEmpty) {
-    stdout.writeln(
-      'config.local.yaml: ${local.existsSync() ? 'present' : 'absent'}',
-    );
-    stdout.writeln(
-      '  password: ${password.isEmpty
-          ? 'unset'
-          : cryptPattern.hasMatch(password)
-          ? 'hashed'
-          : 'PLAINTEXT'}',
-    );
-    stdout.writeln(
-      '  ssh_keys: ${(config.get('user.ssh_keys') as List?)?.length ?? 0} configured entries',
-    );
-    return local.existsSync() ? 0 : 1;
-  }
-  if (action != 'hash')
-    throw BuildFailure('Expected secrets status, hash, or is-hashed', 2);
-  if (!local.existsSync())
-    throw BuildFailure('No config.local.yaml; copy config.local.example.yaml');
-  if (password.isNotEmpty && !cryptPattern.hasMatch(password)) {
-    // Never put plaintext secrets in argv, logs, or shell code.
-    final child = await Process.start('openssl', ['passwd', '-6', '-stdin']);
-    final output = child.stdout.transform(utf8.decoder).join();
-    final errors = child.stderr.transform(utf8.decoder).join();
-    child.stdin.write(password);
-    await child.stdin.close();
-    final code = await child.exitCode;
-    final hash = (await output).trim();
-    await errors;
-    if (code != 0 || !cryptPattern.hasMatch(hash))
-      throw BuildFailure(
-        'openssl password hashing failed; local configuration was not changed',
-      );
-    final source = local.readAsStringSync();
-    final pattern = RegExp(r'^(\s*)password\s*:[^\r\n]*', multiLine: true);
-    final matches = pattern.allMatches(source).toList();
-    if (matches.length != 1)
-      throw BuildFailure(
-        'Expected exactly one password: line; local configuration was not changed',
-      );
-    final match = matches.single;
-    final replacement =
-        "${match.group(1)}password: '${hash.replaceAll("'", "''")}'";
-    final temporary = File('${local.path}.tmp.${pid}');
-    try {
-      temporary.writeAsStringSync('');
-      if (!Platform.isWindows)
-        await runner.run('chmod', ['600', temporary.path]);
-      temporary.writeAsStringSync(
-        source.replaceRange(match.start, match.end, replacement),
-        flush: true,
-      );
-      temporary.renameSync(local.path);
-    } finally {
-      if (temporary.existsSync()) temporary.deleteSync();
-    }
-  }
-  if (!Platform.isWindows) await runner.run('chmod', ['600', local.path]);
-  stdout.writeln('Local password is hashed or unset; permissions updated.');
-  return 0;
 }
 
 /// The workspace's component names, as `--component` selects them.

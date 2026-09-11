@@ -92,8 +92,7 @@ engine/AOT pairing. The daemon compiler has a separate explicit version in
 Shared operations live behind `toolbox dev`; `toolbox dev --help` lists the
 areas, and `toolbox dev os rootfs --help` lists a component's commands. Component
 `tool/*.dart` entry points call the same APIs. There is no Just dependency.
-Keep machine configuration and credentials in ignored `config.local.yaml`,
-starting from `config.local.example.yaml`.
+The image carries no credentials: the device's first run sets them.
 
 Development command overrides are listed in [.env.example](.env.example);
 player and daemon service overrides are in [.env.device.example](.env.device.example).
@@ -123,8 +122,7 @@ From a clean checkout, run the pure Dart CLI from its own package directory:
 
 ```sh
 cd toolbox/cli
-dart run bin/toolbox.dart dev bootstrap \
-  --config /absolute/path/to/config.local.yaml
+dart run bin/toolbox.dart dev bootstrap
 cd ../..
 build/toolbox/cli/toolbox dev build
 ```

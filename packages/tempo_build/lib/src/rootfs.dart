@@ -356,9 +356,6 @@ Future<int> _rootfsCommand(
     stdout.writeln(
       'packages: ${groups.values.whereType<List>().fold(0, (count, entries) => count + entries.length)} across ${groups.length} groups',
     );
-    stdout.writeln(
-      'credentials: password ${(config.get('user.password')?.toString() ?? '').isEmpty ? 'unset' : 'set'}, ${(config.get('user.ssh_keys') as List?)?.length ?? 0} SSH keys',
-    );
     return 0;
   }
   if (action == 'stage-plymouth') {
@@ -418,10 +415,7 @@ Future<int> _rootfsCommand(
     return runner.run(
       'sudo',
       ['-E', ...command],
-      environment: {
-        'TEMPO_CONFIG_HOME': Platform.environment['HOME'] ?? '',
-        'TEMPO_ROOTFS_LOCK_HELD': '1',
-      },
+      environment: {'TEMPO_ROOTFS_LOCK_HELD': '1'},
     );
   }
   if (action == 'clean') {
@@ -489,26 +483,6 @@ Future<void> buildRootfs(RootfsImage image) async {
   final user = get('user.name'), uid = get('user.uid'), gid = get('user.gid');
   if (!RegExp(r'^[a-z_][a-z0-9_-]*$').hasMatch(user) || user == 'root')
     throw BuildFailure('Rootfs requires an unprivileged Unix user name');
-  final password = config.get('user.password')?.toString() ?? '';
-  final keys = list('user.ssh_keys');
-  if (password.isEmpty && keys.isEmpty)
-    throw BuildFailure(
-      'No credentials configured for $user; set user.password or user.ssh_keys in config.local.yaml',
-    );
-  var hash = password;
-  if (password.isNotEmpty &&
-      !RegExp(r'^\$(y|gy|7|2[abxy]|6|5|1)\$').hasMatch(password)) {
-    final process = await Process.start('openssl', ['passwd', '-6', '-stdin']);
-    final output = process.stdout.transform(utf8.decoder).join();
-    final errors = process.stderr.drain<void>();
-    process.stdin.write(password);
-    await process.stdin.close();
-    final code = await process.exitCode;
-    hash = (await output).trim();
-    await errors;
-    if (code != 0 || !hash.startsWith(r'$6$'))
-      throw BuildFailure('Password hashing failed');
-  }
   for (final executable in [
     'debootstrap',
     'chroot',
@@ -639,16 +613,10 @@ Future<void> buildRootfs(RootfsImage image) async {
         stdout.writeln('Optional group not installed: $group');
       }
     }
-    if (hash.isEmpty) {
-      await image.chroot(['passwd', '-l', user]);
-    } else {
-      // Feed hashes via stdin so they are absent from argv/process listings.
-      await runner.run('chroot', [
-        image.mount,
-        '/usr/sbin/chpasswd',
-        '-e',
-      ], input: Stream.value(utf8.encode('$user:$hash\n')));
-    }
+    // No credential is baked in: the account is locked until first run on
+    // the device sets a password, or the flasher's first-run configuration
+    // supplies a hash and keys. Every image is the same image.
+    await image.chroot(['passwd', '-l', user]);
     await image.chroot(['passwd', '-l', 'root']);
     image.remove('etc/sudoers.d/10-tempo');
     if (enabled('user.sudoer')) {
@@ -667,16 +635,6 @@ Future<void> buildRootfs(RootfsImage image) async {
           '/etc/sudoers.d/10-tempo',
         ]);
       }
-    }
-    if (keys.isNotEmpty) {
-      image.write('home/$user/.ssh/authorized_keys', '${keys.join('\n')}\n');
-      await image.mode('home/$user/.ssh', '700');
-      await image.mode('home/$user/.ssh/authorized_keys', '600');
-      await runner.run('chown', [
-        '-R',
-        '$uid:$gid',
-        image.at('home/$user/.ssh'),
-      ]);
     }
     image.write(
       'etc/ssh/sshd_config.d/10-tempo.conf',

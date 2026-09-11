@@ -30,11 +30,8 @@ node_modules/
 # Python bytecode from archived experiments
 __pycache__/
 
-# Local configuration overlay: secrets, never committed.
-/config.local.yaml
-
 # Device-specific modem calibration fixtures survive build/ cleanup but are
-# provisioned locally, like config.local.yaml, rather than published in git.
+# provisioned locally rather than published in git.
 /platform/firmware/local/
 
 # Local rendering caches

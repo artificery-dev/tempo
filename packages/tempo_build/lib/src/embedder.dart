@@ -72,8 +72,9 @@ Future<int> embedderCommand(
         config.string('flutter.engine_binaries.repo'),
       ]);
       await git(['config', 'core.sparseCheckout', 'true']);
-      File(p.join(temporary.path, '.git/info/sparse-checkout'))
-          .writeAsStringSync('${files.map((f) => '/$f').join('\n')}\n');
+      File(
+        p.join(temporary.path, '.git/info/sparse-checkout'),
+      ).writeAsStringSync('${files.map((f) => '/$f').join('\n')}\n');
       await git([
         'fetch',
         '-q',
@@ -185,8 +186,9 @@ Future<int> embedderCommand(
         );
     }
   }
-  File(p.join(owner, 'plugins/plymouth_handoff.c'))
-      .copySync(p.join(source, 'src/plugins/plymouth_handoff.c'));
+  File(
+    p.join(owner, 'plugins/plymouth_handoff.c'),
+  ).copySync(p.join(source, 'src/plugins/plymouth_handoff.c'));
   await toolchain.run([
     'cmake',
     '-S',

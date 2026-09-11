@@ -110,7 +110,9 @@ Future<int> deviceCommand(
           name == '.' ||
           name == '..')
         throw BuildFailure('Screenshot name must be a filename', 2);
-      final source = File(repo.path('platform/diagnostics/device-screenshot.c')),
+      final source = File(
+            repo.path('platform/diagnostics/device-screenshot.c'),
+          ),
           helper = File(repo.path('build/toolbox/device/device-screenshot'));
       helper.parent.createSync(recursive: true);
       if (!helper.existsSync() ||

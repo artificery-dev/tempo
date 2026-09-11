@@ -208,7 +208,7 @@ Future<void> main(List<String> args) async {
   });
   for (final failure in [false, true]) {
     test(
-      'resolved credentials stay out of argv and temporary files are removed (failure=$failure)',
+      'the configuration reaches the helper by file, never argv, and temporary files are removed (failure=$failure)',
       () async {
         final directory = Directory.systemTemp.createTempSync(
           'rootfs container test ',
@@ -217,10 +217,7 @@ Future<void> main(List<String> args) async {
         final repo = Repository(directory.path);
         final runner = RootfsRunner()..failCompile = failure;
         final config = BuildConfig(repo, {
-          'user': {
-            'password': 'never-in-command',
-            'ssh_keys': ['ssh-ed25519 public-key'],
-          },
+          'user': {'name': 'never-in-command'},
         });
         final operation = RootfsContainer(
           repo,
@@ -234,7 +231,7 @@ Future<void> main(List<String> args) async {
         } else {
           expect(await operation, 0);
           expect(
-            (runner.receivedConfig!['user'] as Map)['password'],
+            (runner.receivedConfig!['user'] as Map)['name'],
             'never-in-command',
           );
         }

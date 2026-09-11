@@ -33,7 +33,6 @@ Future<int> firmwareBuildCommand(
 ) async {
   if (args.isNotEmpty) throw BuildFailure('Expected toolbox dev build', 2);
   await requireFirmwareHost(runner);
-  await validateFirmwareInputs(repo, config);
   // binfmt registrations are kernel state and may disappear after a reboot.
   await RootfsContainer(repo, config, runner).checkPrerequisites();
   for (final step in firmwareBuildSteps) {
@@ -55,54 +54,6 @@ Future<void> requireFirmwareHost(CommandRunner runner) async {
   }
 }
 
-/// Validate local credentials before downloads or a rootfs rebuild.
-Future<void> validateFirmwareInputs(Repository repo, BuildConfig config) async {
-  final missing = <String>[];
-  final password = config.get('user.password')?.toString() ?? '';
-  final keys = config.get('user.ssh_keys') as List? ?? [];
-  if (password.isEmpty && keys.isEmpty) {
-    missing.add(
-      'Set user.ssh_keys or user.password in config.local.yaml '
-      '(see config.local.example.yaml; bootstrap --config FILE imports it).',
-    );
-  }
-  if (password == 'change-me') {
-    missing.add(
-      'Replace the example user.password in config.local.yaml, '
-      'or use an SSH public key with a locked password.',
-    );
-  }
-  if (missing.isNotEmpty) {
-    throw BuildFailure(
-      'Firmware inputs need setup:\n${missing.map((s) => '  - $s').join('\n')}',
-    );
-  }
-}
-
-/// Explicit imports never replace machine configuration in place.
-Future<void> importBootstrapInputs(
-  Repository repo,
-  CommandRunner runner, {
-  String? configuration,
-}) async {
-  if (configuration != null) {
-    final source = File(p.absolute(configuration));
-    final destination = File(repo.path('config.local.yaml'));
-    if (!source.existsSync())
-      throw BuildFailure('Missing configuration: ${source.path}', 2);
-    if (destination.existsSync()) {
-      if (destination.readAsStringSync() != source.readAsStringSync()) {
-        throw BuildFailure(
-          'config.local.yaml already exists; merge your settings there before rerunning bootstrap.',
-        );
-      }
-    } else {
-      // Preserve the user's original YAML and comments.
-      await runner.run('install', ['-m', '600', source.path, destination.path]);
-    }
-  }
-}
-
 Future<int> bootstrapCommand(
   Repository repo,
   CommandRunner runner,
@@ -110,18 +61,6 @@ Future<int> bootstrapCommand(
   DeveloperStep dispatch,
 ) async {
   final args = [...arguments];
-  String? option(String flag) {
-    final index = args.indexOf(flag);
-    if (index < 0) return null;
-    if (index + 1 == args.length || args[index + 1].startsWith('--')) {
-      throw BuildFailure('$flag requires a path', 2);
-    }
-    final value = args[index + 1];
-    args.removeRange(index, index + 2);
-    return value;
-  }
-
-  final configuration = option('--config');
   final build = args.remove('--build');
   if (args.isNotEmpty)
     throw BuildFailure('Unexpected bootstrap arguments: ${args.join(' ')}', 2);
@@ -137,9 +76,7 @@ Future<int> bootstrapCommand(
     } on FileSystemException {
       throw BuildFailure('Bootstrap is already running in this checkout.', 73);
     }
-    await importBootstrapInputs(repo, runner, configuration: configuration);
     final config = BuildConfig.load(repo);
-    await validateFirmwareInputs(repo, config);
     await runner.run('git', ['--version']);
     await runner.run('podman', ['info', '--format', '{{.Host.Arch}}']);
     // This may prompt through sudo's own terminal; rootfs uses this same access.

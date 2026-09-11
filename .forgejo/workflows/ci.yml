@@ -42,9 +42,8 @@
 # A release is the Toolbox (Linux x64 and the macOS disk image) and the
 # firmware image. The firmware job builds the rootfs on a loop device with
 # debootstrap under QEMU, so its container runs privileged; the runners
-# allow that. It needs the device user's credentials as the secret
-# TEMPO_CONFIG_LOCAL_YAML, the same config.local.yaml a developer keeps.
-# The tempod bundle is built as a check and kept as an artifact, but it
+# allow that. The image carries no credentials: its account is locked until
+# the device's first run sets a password. The tempod bundle is built as a check and kept as an artifact, but it
 # ships inside the image, not beside the Toolbox.
 #
 # A branch push builds only the components it touched (the `changes` job
@@ -1044,17 +1043,6 @@ jobs:
           echo "binfmt_misc and loop devices are available"
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
-      - name: Write the device credentials
-        # config.local.yaml, the same file a developer keeps: at least a
-        # password or an SSH key for the device user. Kept out of the log.
-        run: |
-          set -eu
-          if [ -z "${{ secrets.TEMPO_CONFIG_LOCAL_YAML }}" ]; then
-            echo "::error::TEMPO_CONFIG_LOCAL_YAML is unset; the image needs the device user's credentials (see config.local.example.yaml)"
-            exit 1
-          fi
-          printf '%s\n' "${{ secrets.TEMPO_CONFIG_LOCAL_YAML }}" > config.local.yaml
-          cd toolbox/cli && "$DART" pub get > /dev/null && "$DART" run bin/toolbox.dart dev os rootfs plan | tail -3
       - name: Restore the pinned Flutter SDKs
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
@@ -1111,9 +1099,6 @@ jobs:
           path: build/dist/*.y2-firmware
           retention-days: 30
           if-no-files-found: error
-      - name: Forget the device credentials
-        if: always()
-        run: rm -f config.local.yaml
 
   release:
     name: Publish release from tag

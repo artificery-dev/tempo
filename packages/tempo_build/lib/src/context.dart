@@ -74,22 +74,11 @@ Object? plainYaml(Object? value) {
   return value;
 }
 
-Object? deepMerge(Object? base, Object? overlay) {
-  if (base is Map<String, Object?> && overlay is Map<String, Object?>) {
-    return {
-      ...base,
-      for (final entry in overlay.entries)
-        entry.key: deepMerge(base[entry.key], entry.value),
-    };
-  }
-  return overlay;
-}
-
 class BuildConfig {
   BuildConfig(this.repository, this.values);
   final Repository repository;
   final Map<String, Object?> values;
-  factory BuildConfig.load(Repository repository, {bool expandKeys = true}) {
+  factory BuildConfig.load(Repository repository) {
     Map<String, Object?> read(String path) {
       final value = plainYaml(loadYaml(File(path).readAsStringSync()));
       if (value == null) return {};
@@ -98,13 +87,7 @@ class BuildConfig {
       return value;
     }
 
-    var values = read(repository.path('config.yaml'));
-    final local = repository.path('config.local.yaml');
-    if (File(local).existsSync())
-      values = deepMerge(values, read(local)) as Map<String, Object?>;
-    final config = BuildConfig(repository, values);
-    if (expandKeys) config._expandKeys();
-    return config;
+    return BuildConfig(repository, read(repository.path('config.yaml')));
   }
   Object? get(String key, {Object? fallback}) {
     Object? value = values;
@@ -120,58 +103,6 @@ class BuildConfig {
     if (value == null || value is Map || value is List)
       throw BuildFailure('Missing scalar configuration: $key');
     return value.toString();
-  }
-
-  Object? redacted([String? key]) {
-    final copy = jsonDecode(jsonEncode(values)) as Map<String, dynamic>;
-    if (copy['user'] is Map &&
-        copy['user']['password'] != null &&
-        copy['user']['password'] != '')
-      copy['user']['password'] = '<redacted; use --raw>';
-    return key == null ? copy : BuildConfig(repository, copy).get(key);
-  }
-
-  void _expandKeys() {
-    final keys = get('user.ssh_keys');
-    if (keys is! List) return;
-    final out = <String>[];
-    for (final entry in keys) {
-      final value = entry.toString().trim();
-      if (value.isEmpty) continue;
-      if (RegExp(r'^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)').hasMatch(value)) {
-        out.add(value);
-        continue;
-      }
-      final match = RegExp(
-        r'''^\{\{\s*file\(\s*["']?(.+?)["']?\s*\)\s*\}\}$''',
-      ).firstMatch(value);
-      if (match == null &&
-          !value.startsWith('~') &&
-          !value.startsWith('/') &&
-          !value.startsWith('./'))
-        throw BuildFailure(
-          'user.ssh_keys entry must be a public key or file reference',
-        );
-      var file = match?.group(1) ?? value;
-      if (file.startsWith('~/'))
-        file = p.join(
-          Platform.environment['TEMPO_CONFIG_HOME'] ??
-              Platform.environment['HOME'] ??
-              Platform.environment['USERPROFILE'] ??
-              '',
-          file.substring(2),
-        );
-      if (!p.isAbsolute(file)) file = repository.path(file);
-      if (!File(file).existsSync())
-        throw BuildFailure('SSH public key file is missing: $file');
-      out.addAll(
-        File(file)
-            .readAsLinesSync()
-            .map((line) => line.trim())
-            .where((line) => line.isNotEmpty && !line.startsWith('#')),
-      );
-    }
-    (values['user'] as Map)['ssh_keys'] = out;
   }
 }
 
