@@ -1,20 +1,21 @@
 # Toolchain container
 
 The host contract for building Tempo is Dart, Git and Podman. Every other
-compiler and build tool lives in one Podman image, `tempo-toolchain`, built
-from `platform/toolchain/Containerfile`. The Dart build tooling in
+compiler and build tool lives in one published container image, the shared
+toolbox at `git.artificery.dev/artificery/toolbox`, pinned by tag as
+`toolchain.image` in `config.yaml`. The Dart build tooling in
 `packages/tempo_build` decides, command by command, whether a step runs on the
 host or inside that image, and it does so through one class, `Toolchain`. The
 root filesystem is the exception: it needs loop mounts and a chroot, so it runs
-in a rootful, privileged instance of the same image.
+in a rootful, privileged instance of the same image. CI runs every job in the
+same image, from the same pin.
 
 ## Components
 
 | Where | What |
 | --- | --- |
-| `platform/toolchain/Containerfile` | The image definition. |
-| `.containerignore` | Limits the build context to `platform/toolchain/`. |
-| `packages/tempo_build/lib/src/context.dart` | `Toolchain`, which builds the image and runs commands in it, and `FlutterSdk`, which finds pinned SDKs. |
+| `config.yaml` `toolchain.image` | The image tag; `TEMPO_TOOLCHAIN_IMAGE` overrides it for one run. |
+| `packages/tempo_build/lib/src/context.dart` | `Toolchain`, which pulls the image and runs commands in it, and `FlutterSdk`, which finds pinned SDKs. |
 | `packages/tempo_build/lib/src/process.dart` | `CommandRunner`, the process wrapper every command goes through, and `BuildFailure`. |
 | `packages/tempo_build/lib/src/rootfs_container.dart` | `RootfsContainer`, the rootful path for rootfs work, and its prerequisite check. |
 | `packages/tempo_build/bin/rootfs_container.dart` | The entry point compiled and run inside the rootful container. |
@@ -26,43 +27,43 @@ in a rootful, privileged instance of the same image.
 
 ## What the image provides
 
-The image starts from `debian:bookworm-slim`, the same release the device
-runs. Its layers, in the order the Containerfile adds them:
+The image is built and published from its own repository,
+`git.artificery.dev/artificery/toolbox`, whose README and `Containerfile`
+are the reference for exactly what it carries and how to change it. It starts
+from `debian:bookworm-slim`, the same release the device runs, so the armhf
+cross toolchain links against the libc the rootfs ships. In outline:
 
-| Layer | Contents |
+| Contents | Where |
 | --- | --- |
-| Kernel cross build | `gcc-arm-linux-gnueabihf`, `libc6-dev-armhf-cross`, `build-essential`, `bc`, `bison`, `flex`, OpenSSL and ncurses headers, `device-tree-compiler`, `kmod`, `cpio`, `rsync`, `python3`, gzip, xz and zstd, Git and curl. |
-| flutter-pi cross build | armhf multiarch development packages for DRM, GBM, EGL, GLES, libinput, udev, xkbcommon, systemd, ALSA and GStreamer, plus `cmake` and `pkg-config`. Linking against bookworm's own armhf libraries gives the binary the sonames the rootfs ships. |
-| Splash | `librsvg2-bin` for SVG rasterisation. |
-| Root filesystem | `debootstrap`, `qemu-user-static`, `e2fsprogs`, `dosfstools`, `exfatprogs`, `parted`, `fdisk`, `fakeroot`, `uuid-runtime`. |
-| Shell | `zsh`, `nodejs`, `unzip`, and Oh My Zsh configured system-wide in `/etc/zsh/zshrc`. |
-| Rust | rustup with the `RUST_VERSION` toolchain, 1.92.0, the `armv7-unknown-linux-gnueabihf` and `wasm32-unknown-unknown` targets, `rustfmt` and `clippy`, under `/opt/rustup` and `/opt/cargo`. `wasm-bindgen-cli` 0.2.122 matches `packages/tempo_usb/rust/Cargo.lock`. |
-| Test Dart | A standalone Dart SDK, `TOOLBOX_TEST_DART_VERSION` 3.12.2, at `/opt/toolbox-test` for the browser transport tests. It replaces neither Flutter pin. |
-| Host native | `libasound2-dev` for the host-architecture daemon build and tests. |
-| Linux Toolbox GUI | `clang`, `ninja-build`, GTK 3, `libmpv` and `libepoxy` headers. |
-| Git LFS | `git-lfs` and `binfmt-support`, which bootstrap borrows rather than requiring on the host. |
+| gcc and g++ cross compilers for armhf, `build-essential`, `bc`, `bison`, `flex`, `dtc`, `kmod`, `cpio` | the kernel and Recovery builds |
+| armhf multiarch development packages for DRM, GBM, EGL, GLES, libinput, udev, xkbcommon, systemd, ALSA and GStreamer, with `cmake` and `ninja` | the flutter-pi cross build |
+| `debootstrap`, `qemu-user-static`, `e2fsprogs`, `parted` | the root filesystem |
+| rustup with a pinned stable, `rustfmt`, `clippy`, the `armv7-unknown-linux-gnueabihf` and `wasm32-unknown-unknown` targets and `wasm-bindgen-cli` | the daemon core, `tempo_kms` and the USB engine |
+| A standalone Dart SDK at `/opt/dart-sdk`, first on `PATH` | the build tool in CI and the browser transport tests |
+| FVM with the current stable Flutter preinstalled | not used by Tempo, whose three pins are provisioned under `build/sdks` |
+| Node, GTK 3, `libmpv`, `libepoxy`, `clang`, `git-lfs`, `zsh` | the Linux Toolbox GUI, the JavaScript actions in CI, the LFS bootstrap, the shell |
 
-The image also sets `TEMPO_TOOLCHAIN=1`, `ARCH=arm`,
-`CROSS_COMPILE=arm-linux-gnueabihf-` and
-`CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc`,
-so a kernel `make` or a `cargo build --target armv7-unknown-linux-gnueabihf`
-needs no further arguments.
+The image sets `TEMPO_TOOLCHAIN=1`, `ARCH=arm` and
+`CROSS_COMPILE=arm-linux-gnueabihf-`, so a kernel `make` inside it needs no
+further arguments, and `TOOLBOX_CONTAINER=1` for the toolbox's own tooling.
+
+Moving to a new image is one line: change the tag in `config.yaml`. The
+Recovery build stamp includes the tag, so Recovery is rebuilt with the new
+compilers; CI's caches key on `config.yaml` too, so every job rebuilds once.
 
 ## Managing the image
 
 ```sh
-toolbox dev toolchain build      # podman build -t tempo-toolchain
-toolbox dev toolchain rebuild    # the same with --no-cache --pull
+toolbox dev toolchain pull       # podman pull of the pinned tag
 toolbox dev toolchain run CMD    # run one command in the container
 toolbox dev toolchain shell      # zsh in the container
 toolbox dev toolchain info       # image inspect, gcc, rustc and dtc versions
-toolbox dev toolchain clean      # remove the image
+toolbox dev toolchain clean      # remove the image from the local store
 ```
 
-`Toolchain.build` runs `podman build` with the checkout root as context and
-the Containerfile passed by path; `.containerignore` keeps everything but
-`platform/toolchain/` out of that context. Bootstrap builds the image once,
-and any `Toolchain.run` that finds no `tempo-toolchain` image builds it first.
+Bootstrap pulls the image once, and any `Toolchain.run` that finds the pinned
+tag missing from the local store pulls it first. The registry is public, so
+no login is needed to pull.
 
 ## How commands are dispatched
 
@@ -80,10 +81,10 @@ cross the process boundary as a list, never as a shell string.
   bind-mounting the checkout at its real host path and working there, with
   `--userns=keep-id` so files come out owned by the developer. The Git
   metadata directory of a worktree is mounted read-only when it lives outside
-  the checkout, so `git` inside the container still resolves. `CARGO_HOME` is
-  pointed at `build/cargo`, keeping the registry cache with the rest of the
-  build output. Callers add environment variables and extra read-only mounts
-  as needed.
+  the checkout, so `git` inside the container still resolves. `HOME` is
+  `build/toolchain-home` and `CARGO_HOME` is `build/cargo`, keeping the
+  shell, SDK and registry caches with the rest of the build output. Callers
+  add environment variables and extra read-only mounts as needed.
 
 Which side each kind of work lands on:
 
@@ -123,7 +124,7 @@ cannot do that, so `RootfsContainer` runs the same image differently:
 Rootless and rootful Podman keep separate image stores. Before each run,
 `_ensureRootfulImage` compares the image ID in both and, when they differ,
 does `podman save` and `sudo podman load` so the rootful side has exactly the
-image a `toolchain rebuild` just produced.
+image the developer's store pulled for the pinned tag.
 
 `checkPrerequisites` runs during bootstrap and at the start of `toolbox dev
 build`. In a disposable container it confirms the tools are present, creates
@@ -173,11 +174,10 @@ a pointer at bootstrap. A `.fvmrc` at the root that disagrees with
 `toolbox dev bootstrap [--config FILE] [--build]` prepares a clean Linux x64
 checkout. The steps, in order:
 
-1. Take `build/bootstrap/lock`, import `--config` into `config.local.yaml`
-   if that file does not exist, and check that a password or SSH key is set.
+1. Take `build/bootstrap/lock`.
 2. Confirm `git`, rootless `podman info` and `sudo podman info` work.
 3. `git submodule update --init --recursive --depth 1`.
-4. Build the toolchain image.
+4. Pull the toolchain image.
 5. Copy the container's `git-lfs` into the Git common directory under
    `tempo/bin`, configure the LFS filters to use it, and pull
    `platform/firmware/**`, then verify no firmware file is still a pointer.

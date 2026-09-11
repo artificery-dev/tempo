@@ -124,7 +124,7 @@ toolbox dev toolbox check [flutter arguments]
 After the Rust checks, `toolbox check` builds the Wasm engine and runs
 `wasm-bindgen`, because the browser suites import the generated bindings from
 `toolbox/app/web/pkg`. It then runs every `packages/tempo_usb/test/browser_*_test.dart`
-with `dart test -p node` using the Dart SDK at `/opt/toolbox-test` inside the
+with `dart test -p node` using the image's own Dart SDK at `/opt/dart-sdk` inside the
 container, with `PUB_CACHE` and `HOME` under `build/toolbox/`. Those files
 carry `@TestOn('node')`, so a plain `dart test` on the host skips them.
 Finally it runs `flutter analyze` and `flutter test` in `toolbox/app` and

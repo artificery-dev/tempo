@@ -42,7 +42,7 @@ const developerHelp = """toolbox dev [--repo PATH] <area> <action> [arguments]
   diagnostics analyze-tone WAV [--silence-db -45] [--minimum-gap-ms 5]
   device ssh|status|link|reboot|poweroff|screenshot|collect-sysinfo
   device flash-boot|flash-logo|install-rootfs
-  toolchain build|rebuild|run|shell|info|clean
+  toolchain pull|run|shell|info|clean
   dist [--full] [--with-rootfs]
   config get|list|json|has [key]
 """;
@@ -91,9 +91,9 @@ Future<int> runDeveloperCommand(
     if (area == 'toolchain') {
       final toolchain = Toolchain(repository, runner);
       if (action == 'clean')
-        return await runner.run('podman', ['rmi', 'tempo-toolchain']);
+        return await runner.run('podman', ['rmi', toolchain.image]);
       if (action == 'info') {
-        await runner.run('podman', ['image', 'inspect', 'tempo-toolchain']);
+        await runner.run('podman', ['image', 'inspect', toolchain.image]);
         for (final command in [
           ['arm-linux-gnueabihf-gcc', '--version'],
           ['rustc', '--version'],
@@ -103,12 +103,11 @@ Future<int> runDeveloperCommand(
         return 0;
       }
       return await switch (action) {
-        'build' => toolchain.build(args),
-        'rebuild' => toolchain.build(['--no-cache', '--pull', ...args]),
+        'pull' when args.isEmpty => toolchain.pull(),
         'run' when args.isNotEmpty => toolchain.run(args),
         'shell' => toolchain.run(['zsh', ...args]),
         _ => throw BuildFailure(
-          'Expected toolchain build, rebuild, run COMMAND, or shell',
+          'Expected toolchain pull, run COMMAND, shell, info, or clean',
           2,
         ),
       };

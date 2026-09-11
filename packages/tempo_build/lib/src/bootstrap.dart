@@ -96,8 +96,8 @@ Future<int> bootstrapCommand(
       '--depth',
       '1',
     ], workingDirectory: repo.root);
-    stdout.writeln('\nBuilding the shared toolchain');
-    await Toolchain(repo, runner).build([]);
+    stdout.writeln('\nPulling the shared toolchain');
+    await Toolchain(repo, runner).pull();
     await provisionFirmwareLfs(repo, runner);
     stdout.writeln('\nProvisioning pinned SDKs');
     await bootstrapSdks(repo, config, runner);

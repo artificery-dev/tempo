@@ -3,19 +3,17 @@
 Tempo is built and driven from one command-line tool, `toolbox dev`, whose
 implementation lives in the `tempo_build` Dart package. The host needs only
 Dart, Git and Podman: every cross compiler, kernel tool and Rust toolchain
-lives in the `tempo-toolchain` container, and the pinned Flutter SDKs are
-provisioned into the checkout. Machine-specific settings and credentials go
-in a gitignored `config.local.yaml` that is merged over the tracked
-`config.yaml`. The complete firmware build runs on Linux x64; the emulator
-and most package checks run wherever the pinned Flutter SDKs run.
+lives in the shared toolbox container image pinned in `config.yaml`, and the
+pinned Flutter SDKs are provisioned into the checkout. Nothing secret is
+configured: the image ships its account locked until the device's first run.
+The complete firmware build runs on Linux x64; the emulator and most package
+checks run wherever the pinned Flutter SDKs run.
 
 ## Components
 
 | Where | What |
 | --- | --- |
-| `config.yaml` | The tracked workspace configuration every build reads. No secrets. |
-| `config.local.yaml` | Gitignored, deep-merged over `config.yaml`; holds the device password and SSH keys. |
-| `config.local.example.yaml` | The template for `config.local.yaml`. |
+| `config.yaml` | The tracked workspace configuration every build reads, including the toolchain image pin. No secrets. |
 | `.env.example` | The environment variables the build and dev CLI honour, with their defaults. |
 | `.env.device.example` | The environment variables the player and daemon services honour on the device. |
 | `toolbox/cli/bin/toolbox.dart` | The CLI entry point; `toolbox dev` hands off to `tempo_build`. |
@@ -23,7 +21,7 @@ and most package checks run wherever the pinned Flutter SDKs run.
 | `packages/tempo_build/lib/src/bootstrap.dart` | `toolbox dev bootstrap` and the firmware build order. |
 | `packages/tempo_build/lib/src/bootstrap_sdk.dart` | Provisioning of the pinned Flutter SDKs under `build/sdks/flutter/`. |
 | `packages/tempo_build/lib/src/context.dart` | `Repository`, `BuildConfig`, `FlutterSdk.discover` and `Toolchain`. |
-| `platform/toolchain/Containerfile` | The container image; see [Toolchain container](../platform/toolchain.md). |
+| `git.artificery.dev/artificery/toolbox` | The container image's own repository; see [Toolchain container](../platform/toolchain.md). |
 | `build/toolbox/cli/toolbox` | The compiled CLI that bootstrap produces. |
 
 ## Host requirements
@@ -120,7 +118,7 @@ build/toolbox/cli/toolbox dev build
 no local file exists. If one exists and differs, bootstrap stops and asks you
 to merge by hand; it never overwrites machine configuration. Bootstrap then
 takes `build/bootstrap/lock`, validates the credentials, checks Git and both
-Podman modes, initialises the submodules shallowly, builds the toolchain
+Podman modes, initialises the submodules shallowly, pulls the toolchain
 image, pulls the Git LFS firmware under `platform/firmware/`, provisions the
 three pinned Flutter SDKs, checks the rootful rootfs prerequisites, resolves
 the workspace dependencies, fetches the flutter-pi engine binaries and

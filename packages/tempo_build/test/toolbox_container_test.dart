@@ -77,7 +77,7 @@ void main() {
         contains('PUB_CACHE=${repo.path('build/toolbox/test-pub-cache')}'),
       );
       expect(runner.calls.last.sublist(runner.calls.last.length - 5), [
-        '/opt/toolbox-test/dart-sdk/bin/dart',
+        '/opt/dart-sdk/bin/dart',
         'test',
         '-p',
         'node',

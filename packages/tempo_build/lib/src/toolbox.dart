@@ -200,7 +200,8 @@ final class ToolboxBuildTools {
       'HOME': home.path,
       'DART_SUPPRESS_ANALYTICS': 'true',
     };
-    const dart = '/opt/toolbox-test/dart-sdk/bin/dart';
+    // The toolchain image's own Dart, first on its PATH.
+    const dart = '/opt/dart-sdk/bin/dart';
     await toolchain.run(
       [dart, 'pub', 'get'],
       workingDirectory: directory,

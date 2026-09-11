@@ -23,6 +23,7 @@ class RootfsContainer {
     required String uid,
     required String gid,
     required List<String> command,
+    required String image,
     bool terminal = false,
   }) => [
     'run', '--rm', '-i', if (terminal) '-t',
@@ -32,26 +33,28 @@ class RootfsContainer {
     '-e', 'TEMPO_ROOTFS_HOST=1',
     '-e', 'TEMPO_ROOTFS_LOCK_HELD=1', '-e', 'TEMPO_TOOLCHAIN=1',
     '-e', 'SUDO_UID=$uid', '-e', 'SUDO_GID=$gid',
-    'tempo-toolchain', helper, root, configuration, ...command,
+    image, helper, root, configuration, ...command,
   ];
 
   Future<void> _ensureRootfulImage(String uid, Directory temporary) async {
-    // Developer toolchain builds use the caller's image store. Synchronize
-    // its exact image into the rootful store rather than silently using an
-    // older rootful tag after `toolbox dev toolchain rebuild`.
+    // The developer's store holds the pulled image. Synchronize that exact
+    // image into the rootful store rather than pulling twice or silently
+    // using an older copy of the tag there.
+    final toolchain = Toolchain(repo, runner);
+    final image = toolchain.image;
     if ((await runner.capture('podman', [
           'image',
           'exists',
-          'tempo-toolchain',
+          image,
         ], check: false)).exitCode !=
         0) {
-      await Toolchain(repo, runner).build([]);
+      await toolchain.pull();
     }
     if (uid != '0') {
       final source = (await runner.capture('podman', [
         'image',
         'inspect',
-        'tempo-toolchain',
+        image,
         '--format',
         '{{.Id}}',
       ])).stdout.toString().trim();
@@ -59,19 +62,14 @@ class RootfsContainer {
         'podman',
         'image',
         'inspect',
-        'tempo-toolchain',
+        image,
         '--format',
         '{{.Id}}',
       ], check: false);
       if (destination.exitCode != 0 ||
           destination.stdout.toString().trim() != source) {
         final archive = p.join(temporary.path, 'toolchain.tar');
-        await runner.run('podman', [
-          'save',
-          '--output',
-          archive,
-          'tempo-toolchain',
-        ]);
+        await runner.run('podman', ['save', '--output', archive, image]);
         await runner.run('sudo', ['podman', 'load', '--input', archive]);
         if (File(archive).existsSync()) File(archive).deleteSync();
       }
@@ -115,7 +113,7 @@ class RootfsContainer {
         '--network=none',
         '-v',
         '$busybox:/tempo-busybox:ro,rprivate',
-        'tempo-toolchain',
+        Toolchain(repo, runner).image,
         'sh',
         '-ceu',
         prerequisiteScript,
@@ -225,6 +223,7 @@ echo 'Rootfs prerequisites verified: ext4 loop mount, nested ARM execution, clea
           uid: uid,
           gid: gid,
           command: command,
+          image: Toolchain(repo, runner).image,
           terminal: stdin.hasTerminal,
         ),
       ]);

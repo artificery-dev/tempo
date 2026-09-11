@@ -15,7 +15,7 @@ initramfs that the kernel build embeds in `boot.img`.
 | --- | --- |
 | `config.yaml` `device:`, `user:`, `shell:`, `networking:`, `firewall:`, `rootfs:` | Hostname, the unprivileged user and its groups, Oh My Zsh, the gadget and WiFi links, DNS and mDNS, the ufw policy, the Debian suite and package groups. |
 | `packages/tempo_build/lib/src/rootfs.dart` | `RootfsImage` and `buildRootfs`: the build pipeline, `stage`, `shell`, `plan`, `clean` and the checkout lock. |
-| `packages/tempo_build/lib/src/rootfs_container.dart` | `RootfsContainer`: runs those commands as root inside the `tempo-toolchain` image. |
+| `packages/tempo_build/lib/src/rootfs_container.dart` | `RootfsContainer`: runs those commands as root inside the toolchain image. |
 | `packages/tempo_build/bin/rootfs_container.dart` | The entry point compiled and executed inside that container. |
 | `packages/tempo_build/lib/src/system_runtime.dart` | `toolbox dev os runtime build`: cross-compiles the `tempo-system` helper and verifies it before staging. |
 | `platform/rootfs/tool/*.dart` | Entry points for `os rootfs build`, `stage`, `shell`, `plan`, `clean`, `stage-plymouth`, `os initramfs build`, `render` and `os runtime build`. |
@@ -53,10 +53,10 @@ writes the merged configuration to a `0600` JSON file under
 `build/rootfs-container/`, and runs `podman run --privileged --user 0:0
 --userns=host` with the checkout bind-mounted at its real path using private
 mount propagation, so loop mounts of the image never reach the host
-namespace. The `tempo-toolchain` image supplies debootstrap, QEMU and the
-filesystem tools; see [Toolchain container](toolchain.md). A newer
-`tempo-toolchain` in the developer's image store is exported and loaded into
-the rootful store first. `SUDO_UID` and `SUDO_GID` pass through so the
+namespace. The toolchain image supplies debootstrap, QEMU and the
+filesystem tools; see [Toolchain container](toolchain.md). The pinned image
+in the developer's store is exported and loaded into the rootful store first
+when the two differ. `SUDO_UID` and `SUDO_GID` pass through so the
 finished image is chowned back to the calling user.
 
 `build`, `stage`, `shell` and `clean` take an exclusive `flock` on

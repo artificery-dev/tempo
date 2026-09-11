@@ -1,37 +1,29 @@
 # Tempo CI: analyze, test and build each component in its own job, and
 # publish the packages as a release from a tag.
 #
-# Job graph: toolchain -> {check-app, check-daemon, check-toolbox,
-# build-app, build-daemon, recovery -> {build-toolbox, build-toolbox-macos},
-# cadence, splash, kernel} -> release. A component's checks run beside its
-# build, so a
-# failure names both the component and the stage; the Toolbox build needs
-# Recovery's images, and release waits for every job and collects the
-# tarballs the build jobs uploaded. Package versions come from
-# .forgejo/version.sh so every job agrees on the file names.
+# Job graph: changes -> {check-app, check-daemon, check-toolbox, build-app,
+# build-daemon, cadence, splash, kernel, recovery -> {build-toolbox,
+# build-toolbox-macos}} -> rootfs -> firmware -> release. A component's
+# checks run beside its build, so a failure names both the component and the
+# stage; the Toolbox build needs Recovery's images, the rootfs needs the app,
+# tempod and cadenced, the firmware image needs the rootfs, Recovery, the
+# splash and the kernel, and release waits for every job and collects what
+# they uploaded. Package versions come from .forgejo/version.sh so every job
+# agrees on the file names.
 #
-# The runners are container-only (no docker socket, unprivileged), so every
-# job runs inside an image. The check and component jobs run inside the toolchain
-# image from platform/toolchain/Containerfile, which this workflow builds with
-# kaniko and pushes to this Forgejo instance's container registry the first
-# time a given platform/toolchain/digest.sh value is seen; later runs find the
-# tag and skip straight to using it. Inside that image TEMPO_TOOLCHAIN=1 makes
-# the build tool run its container steps directly.
+# Every job runs inside the shared toolchain image, git.artificery.dev/
+# artificery/toolbox, pinned as toolchain.image in config.yaml; the changes
+# job reads the pin and the local build tool uses the same one. Inside it
+# TEMPO_TOOLCHAIN=1 makes the build tool run its container steps directly.
 #
-# Pushing that image needs package write access, which Forgejo does not give
-# the workflow token. The supported way is an Authorized Integration: the
-# workflow requests a short-lived JWT (enable-openid-connect) and the registry
-# accepts it as a Basic-auth password. One-time setup by the integration's
-# owner:
-#   1. User settings > Authorized Integrations > Add authorized integration
-#      > Forgejo Actions (Local): select this repository, workflow file
-#      `ci.yml`, git reference empty (every branch and tag builds), access
-#      "All (public, private, and limited)" with every permission "No access"
-#      except package = "Read and write".
-#   2. Store the audience it shows (not secret) as the repository variable
-#      TEMPO_REGISTRY_AUDIENCE.
-# Alternatively the CI_FORGEJO_REGISTRY_USERNAME / CI_FORGEJO_REGISTRY_TOKEN
-# secrets (an access token with package scope) take precedence when set.
+# Nothing is built twice for the same inputs. Each check and build job
+# computes a key from the git blobs of everything it reads
+# (.forgejo/inputs.sh), restores that key's output from the actions cache,
+# and skips its work on a hit, re-publishing the kept output as this run's
+# artifact; the checks keep a stamp. A tag run therefore reuses whatever
+# develop already built from the same sources. Debian packages in the rootfs
+# come from the network at build time, so a hit also freezes them until an
+# input changes; the salt in inputs.sh forces everything to rebuild.
 #
 # main, develop and ci all run the whole pipeline. Releases come only from
 # tags: a `v*` tag publishes as itself and must sit on main and match the
@@ -40,11 +32,11 @@
 # the release path; delete the release and the tag once it has proved itself.
 #
 # A release is the Toolbox (Linux x64 and the macOS disk image) and the
-# firmware image. The firmware job builds the rootfs on a loop device with
-# debootstrap under QEMU, so its container runs privileged; the runners
-# allow that. The image carries no credentials: its account is locked until
-# the device's first run sets a password. The tempod bundle is built as a check and kept as an artifact, but it
-# ships inside the image, not beside the Toolbox.
+# firmware image. The rootfs job builds on a loop device with debootstrap
+# under QEMU, so its container runs privileged; the runners allow that. The
+# image carries no credentials: its account is locked until the device's
+# first run sets a password. The tempod bundle is built as a check and kept
+# as an artifact, but it ships inside the image, not beside the Toolbox.
 #
 # A branch push builds only the components it touched (the `changes` job
 # decides); a tag or a manual run builds everything.
@@ -56,13 +48,10 @@ name: CI
     tags: ['v*', 'ci-test']
   workflow_dispatch:
 
-enable-openid-connect: true
-
 env:
-  TOOLCHAIN_IMAGE: tempo-toolchain
-  # The Dart the toolchain image carries for the Toolbox's own tests; it runs
-  # the build tool too, so no SDK has to be provisioned before it.
-  DART: /opt/toolbox-test/dart-sdk/bin/dart
+  # The toolchain image's own Dart, first on its PATH: it runs the build
+  # tool, so no SDK has to be provisioned before it.
+  DART: /opt/dart-sdk/bin/dart
 
 jobs:
   changes:
@@ -82,12 +71,22 @@ jobs:
       platform: ${{ steps.decide.outputs.platform }}
       firmware: ${{ steps.decide.outputs.firmware }}
       recovery: ${{ steps.decide.outputs.recovery }}
+      # The shared toolchain image every job runs in, pinned in config.yaml
+      # so the local build tool and CI agree.
+      image: ${{ steps.image.outputs.image }}
     steps:
       - name: Checkout
         uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Read the toolchain image pin
+        id: image
+        run: |
+          set -eu
+          image=$(sed -n '/^toolchain:/,/^[^ ]/s/^  image: *//p' config.yaml | head -1)
+          [ -n "$image" ] || { echo "::error::config.yaml names no toolchain.image"; exit 1; }
+          echo "image=$image" | tee -a "$GITHUB_OUTPUT"
       - name: Decide
         id: decide
         env:
@@ -139,113 +138,16 @@ jobs:
             echo "$name=$value" | tee -a "$GITHUB_OUTPUT"
           done
 
-  toolchain:
-    name: Resolve toolchain image
-    runs-on: linux-amd64-container
-    timeout-minutes: 10
-    outputs:
-      image: ${{ steps.resolve.outputs.image }}
-      exists: ${{ steps.resolve.outputs.exists }}
-    steps:
-      - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Compute image tag and look it up in the registry
-        id: resolve
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
-          REGISTRY_TOKEN: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          : "${GITHUB_SERVER_URL:?set by the instance}"
-          : "${GITHUB_REPOSITORY:?}"
-          registry=$(printf %s "$GITHUB_SERVER_URL" | sed 's#^https\?://##')
-          owner=$(printf %s "${GITHUB_REPOSITORY%%/*}" | tr 'A-Z' 'a-z')
-          digest=$(sh platform/toolchain/digest.sh)
-          image="$registry/$owner/$TOOLCHAIN_IMAGE:$digest"
-          status=$(curl -sS -o /dev/null -w '%{http_code}' \
-            -u "$REGISTRY_USERNAME:$REGISTRY_TOKEN" \
-            -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-            "https://$registry/v2/$owner/$TOOLCHAIN_IMAGE/manifests/$digest" || true)
-          if [ "$status" = 200 ]; then exists=true; else exists=false; fi
-          echo "Toolchain image $image (registry answered $status, exists=$exists)"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "exists=$exists" >> "$GITHUB_OUTPUT"
-
-  toolchain-build:
-    name: Build and push toolchain image
-    needs: toolchain
-    if: needs.toolchain.outputs.exists != 'true'
-    runs-on: linux-amd64-container
-    timeout-minutes: 90
-    container:
-      image: gcr.io/kaniko-project/executor:v1.23.2-debug
-    steps:
-      # kaniko's image has busybox (whose wget lacks TLS) but no git, curl or
-      # node. Credentials are therefore obtained by a curl docker action,
-      # which shares the job workspace; the same step fetches the Containerfile
-      # at the exact commit, since it copies nothing else from the checkout.
-      # (kaniko's own git context is not an option here: go-git reports the
-      # LFS-tracked firmware blobs as unstaged changes and refuses.)
-      - name: Obtain registry credentials and the Containerfile
-        uses: docker://docker.io/curlimages/curl:8.22.0
-        env:
-          IMAGE: ${{ needs.toolchain.outputs.image }}
-          AUDIENCE: ${{ vars.TEMPO_REGISTRY_AUDIENCE }}
-          REGISTRY_USERNAME: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME }}
-          REGISTRY_TOKEN: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        with:
-          entrypoint: /bin/sh
-          args: >-
-            -eu -c '
-            registry=${IMAGE%%/*}; path=${IMAGE#*/}; path=${path%%:*};
-            if [ -n "$REGISTRY_TOKEN" ]; then
-              user=$REGISTRY_USERNAME; pass=$REGISTRY_TOKEN; how="the CI_FORGEJO_REGISTRY_* secrets";
-            elif [ -n "$AUDIENCE" ]; then
-              : "${ACTIONS_ID_TOKEN_REQUEST_URL:?enable-openid-connect did not provide an ID token endpoint}";
-              pass=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | sed -n "s/.*\"value\":\"\([^\"]*\)\".*/\1/p");
-              [ -n "$pass" ] || { echo "::error::No JWT for audience $AUDIENCE; check the Authorized Integration restricts to this repository, ci.yml and this event"; exit 1; };
-              user=$ACTOR; how="an Authorized Integration JWT (audience $AUDIENCE)";
-            else
-              echo "::error::No registry credentials: set the TEMPO_REGISTRY_AUDIENCE variable to an Authorized Integration with package write capability, or the CI_FORGEJO_REGISTRY_USERNAME / CI_FORGEJO_REGISTRY_TOKEN secrets."; exit 1;
-            fi;
-            status=$(curl -sS -o /dev/null -w "%{http_code}" -u "$user:$pass" "https://$registry/v2/token?service=container_registry&scope=repository:$path:pull,push");
-            [ "$status" = 200 ] || { echo "::error::Registry $registry refused push credentials from $how (HTTP $status)"; exit 1; };
-            echo "Registry $registry accepted push credentials from $how";
-            printf "{\"auths\":{\"%s\":{\"auth\":\"%s\"}}}" "$registry" "$(printf "%s:%s" "$user" "$pass" | base64 | tr -d "\n")" > "$GITHUB_WORKSPACE/.registry-auth.json";
-            mkdir -p "$GITHUB_WORKSPACE/context";
-            curl -fsSL "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/commit/$GITHUB_SHA/platform/toolchain/Containerfile" -o "$GITHUB_WORKSPACE/context/Containerfile";
-            echo "Fetched platform/toolchain/Containerfile at $GITHUB_SHA"
-            '
-      - name: Build platform/toolchain/Containerfile with kaniko and push
-        env:
-          IMAGE: ${{ needs.toolchain.outputs.image }}
-        run: |
-          set -eu
-          mkdir -p /kaniko/.docker
-          mv "$GITHUB_WORKSPACE/.registry-auth.json" /kaniko/.docker/config.json
-          echo "Building $IMAGE from the Containerfile at $GITHUB_SHA"
-          /kaniko/executor \
-            --context "dir://$GITHUB_WORKSPACE/context" \
-            --dockerfile Containerfile \
-            --destination "$IMAGE" \
-            --custom-platform linux/amd64 \
-            --snapshot-mode redo \
-            --compressed-caching=false
-
   check-app:
     name: Analyze and test Tempo app
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.check_app == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 60
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -266,33 +168,53 @@ jobs:
           lfs: true
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh check-app)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        # A stamp: the same sources, pins and toolchain passed already, so
+        # there is nothing to analyze or test again.
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/checks/app
+          key: ${{ steps.key.outputs.key }}
       - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" pub get
       - name: Resolve the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get --component app
       - name: Analyze
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze --component app
       - name: Test
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test --component app
+      - name: Record the pass
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: mkdir -p build/checks/app && echo "${{ steps.key.outputs.key }}" > build/checks/app/passed
+
 
   check-daemon:
     name: Analyze and test tempod
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.check_daemon == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 60
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -313,33 +235,53 @@ jobs:
           lfs: true
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh check-daemon)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        # A stamp: the same sources, pins and toolchain passed already, so
+        # there is nothing to analyze or test again.
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/checks/daemon
+          key: ${{ steps.key.outputs.key }}
       - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" pub get
       - name: Resolve the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get --component daemon
       - name: Analyze
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze --component daemon
       - name: Test
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test --component daemon
+      - name: Record the pass
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: mkdir -p build/checks/daemon && echo "${{ steps.key.outputs.key }}" > build/checks/daemon/passed
+
 
   check-toolbox:
     name: Analyze and test Toolbox
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.check_toolbox == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -360,33 +302,53 @@ jobs:
           lfs: true
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh check-toolbox)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        # A stamp: the same sources, pins and toolchain passed already, so
+        # there is nothing to analyze or test again.
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/checks/toolbox
+          key: ${{ steps.key.outputs.key }}
       - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" pub get
       - name: Resolve the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get --component toolbox
       - name: Analyze
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace analyze --component toolbox
       - name: Test
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace test --component toolbox
+      - name: Record the pass
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: mkdir -p build/checks/toolbox && echo "${{ steps.key.outputs.key }}" > build/checks/toolbox/passed
+
 
   recovery:
     name: Build Recovery images
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.recovery == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 120
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -406,13 +368,16 @@ jobs:
           submodules: recursive
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh recovery)" | tee -a "$GITHUB_OUTPUT"
       - name: Restore Recovery
         # The build tool rebuilds Recovery only when its inputs changed, from
         # a content-hash stamp; the cache just carries the last outputs.
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/recovery
-          key: recovery-${{ hashFiles('platform/recovery/**', 'platform/kernel/config/y2.config', '.gitmodules') }}
+          key: ${{ steps.key.outputs.key }}
       - name: Resolve the build tool
         run: cd toolbox/cli && "$DART" pub get
       - name: Build Recovery
@@ -432,15 +397,14 @@ jobs:
 
   build-daemon:
     name: Build tempod for the Y2
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.daemon == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -460,28 +424,48 @@ jobs:
         run: git config --global --add safe.directory '*'
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh daemon)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/daemon-artifact
+          key: ${{ steps.key.outputs.key }}
       - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh
       - name: Resolve the build tool and the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd toolbox/cli
           "$DART" pub get
           "$DART" run bin/toolbox.dart dev workspace get
       - name: Build the tempod ARM bundle
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev daemon build --target arm
       - name: Package
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
-          mkdir -p build/dist
+          mkdir -p build/daemon-artifact
           stage=$(mktemp -d)
           mkdir -p "$stage/tempod"
           cp -a build/os/daemon/arm/bundle/. "$stage/tempod/"
-          tar -C "$stage" -czf "build/dist/tempod-${TEMPO_VERSION}-linux-armhf.tar.gz" tempod
+          tar -C "$stage" -czf build/daemon-artifact/tempod-linux-armhf.tar.gz tempod
+      - name: Name the package for this version
+        # The kept archive carries no version; the name does.
+        run: |
+          set -eu
+          mkdir -p build/dist
+          cp build/daemon-artifact/tempod-linux-armhf.tar.gz "build/dist/tempod-${TEMPO_VERSION}-linux-armhf.tar.gz"
           ls -la build/dist
       - name: Save package
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
@@ -495,15 +479,14 @@ jobs:
     name: Fetch cadenced release
     # Proves the pinned cadenced release is still downloadable and matches
     # its recorded checksum; the firmware build depends on it.
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 15
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -521,9 +504,20 @@ jobs:
           lfs: true
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh cadence)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/os/cadence/armhf
+          key: ${{ steps.key.outputs.key }}
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" pub get
       - name: Fetch the pinned cadenced release
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
       - name: Save the cadenced bundle
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
@@ -535,15 +529,15 @@ jobs:
 
   build-toolbox:
     name: Build Toolbox for Linux
-    needs: [changes, toolchain, recovery]
+    needs: [changes, recovery]
     if: >-
-      always() && needs.toolchain.result == 'success'
+      always()
       && needs.recovery.result == 'success'
       && needs.changes.outputs.toolbox == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 120
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -565,37 +559,57 @@ jobs:
         run: git config --global --add safe.directory '*'
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh toolbox)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/toolbox-artifact
+          key: ${{ steps.key.outputs.key }}
       - name: Collect Recovery images
         # The build tool checks them against their stamp and skips the
         # kernel build when they are current.
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
         with:
           name: recovery-images
           path: build/recovery
       - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh
       - name: Resolve the build tool and the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd toolbox/cli
           "$DART" pub get
           "$DART" run bin/toolbox.dart dev workspace get
       - name: Build the Toolbox for Linux
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev toolbox build linux
       - name: Package
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
-          mkdir -p build/dist
+          mkdir -p build/toolbox-artifact
           gui=$(ls -d build/toolbox/flutter/linux/*/release/bundle | head -1)
           stage=$(mktemp -d)
           mkdir -p "$stage/tempo-toolbox"
           cp -a build/toolbox/cli "$stage/tempo-toolbox/cli"
           cp -a "$gui" "$stage/tempo-toolbox/gui"
-          tar -C "$stage" -czf "build/dist/tempo-toolbox-${TEMPO_VERSION}-linux-x64.tar.gz" tempo-toolbox
+          tar -C "$stage" -czf build/toolbox-artifact/tempo-toolbox-linux-x64.tar.gz tempo-toolbox
+      - name: Name the package for this version
+        run: |
+          set -eu
+          mkdir -p build/dist
+          cp build/toolbox-artifact/tempo-toolbox-linux-x64.tar.gz "build/dist/tempo-toolbox-${TEMPO_VERSION}-linux-x64.tar.gz"
           ls -la build/dist
       - name: Save package
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
@@ -609,15 +623,14 @@ jobs:
     name: Build Tempo app for the Y2
     # The Y2's app: flutter-pi engine binaries, the flutter-pi embedder
     # cross-built for ARM, and the AOT-compiled Flutter bundle.
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.app == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 90
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -637,49 +650,64 @@ jobs:
           submodules: recursive
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh app)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/app-artifact
+          key: ${{ steps.key.outputs.key }}
       - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh
       - name: Resolve the build tool and the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd toolbox/cli
           "$DART" pub get
           "$DART" run bin/toolbox.dart dev workspace get
       - name: Fetch the flutter-pi engine binaries
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi engine
       - name: Build flutter-pi
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi build
       - name: Build the app bundle
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app build --release
       - name: Package
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
-          mkdir -p build/dist
-          tar -C build -czf build/dist/tempo-app-armhf.tar.gz --exclude=engine-binaries app
-          ls -la build/dist
+          mkdir -p build/app-artifact
+          tar -C build -czf build/app-artifact/tempo-app-armhf.tar.gz --exclude=engine-binaries app
+          ls -la build/app-artifact
       - name: Save the app bundle
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
         with:
           name: tempo-app
-          path: build/dist/tempo-app-armhf.tar.gz
+          path: build/app-artifact/tempo-app-armhf.tar.gz
           retention-days: 30
           if-no-files-found: error
 
   splash:
     name: Build splash images
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 30
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -697,11 +725,23 @@ jobs:
           lfs: true
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh splash)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/os/splash
+          key: ${{ steps.key.outputs.key }}
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" pub get
       - name: Render the splash assets
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os splash assets
       - name: Build the splash images
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os splash build
       - name: Save the splash images
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
@@ -716,15 +756,14 @@ jobs:
     # zImage and the device tree. The initramfs takes its Plymouth payload
     # from the rootfs, so the shipping boot image is packed by the firmware
     # job; the boot.img made here proves the kernel and its configuration.
-    needs: [changes, toolchain, toolchain-build]
+    needs: [changes]
     if: >-
-      always() && needs.toolchain.result == 'success'
-      && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
+      always()
       && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 180
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -744,15 +783,27 @@ jobs:
           submodules: recursive
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh kernel)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/os/kernel-artifact
+          key: ${{ steps.key.outputs.key }}
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" pub get
       - name: Build the kernel and boot image
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os kernel build
       - name: Stage the kernel for the firmware image
         # Artifacts keep neither file modes nor dot files, so the pieces the
         # firmware job needs are staged flat: kernel, device tree, the cpio
         # generator for the initramfs, and the provenance the dist manifest
         # records.
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
           stage=build/os/kernel-artifact
@@ -837,12 +888,25 @@ jobs:
           fi
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
+      - name: Compute the key from the inputs
+        id: key
+        run: echo "key=$(sh .forgejo/inputs.sh toolbox-macos)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore an earlier build of the same inputs
+        # A disk image kept from an earlier build of the same inputs is signed
+        # the same way; on a tag it is notarised below like a fresh one.
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/toolbox-macos-artifact
+          key: ${{ steps.key.outputs.key }}
       - name: Restore the pinned Flutter SDK
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: build/sdks
           key: flutter-sdk-macos-${{ hashFiles('toolbox/app/.fvmrc') }}
       - name: Provision the pinned Flutter SDK
+        if: steps.cache.outputs.cache-hit != 'true'
         run: sh .forgejo/sdks.sh toolbox
       - name: Locate the SDK's Dart
         run: |
@@ -850,11 +914,13 @@ jobs:
           pin=$(sed -n 's/.*"flutter": *"\([^"]*\)".*/\1/p' toolbox/app/.fvmrc | head -1)
           echo "MAC_DART=$PWD/build/sdks/flutter/$pin/bin/cache/dart-sdk/bin/dart" >> "$GITHUB_ENV"
       - name: Collect Recovery images
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
         with:
           name: recovery-images
           path: build/recovery
       - name: Resolve the build tool
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$MAC_DART" pub get
       - name: Unlock a signing keychain
         id: signing
@@ -890,16 +956,18 @@ jobs:
           fi
           echo "TEMPO_CODESIGN_IDENTITY=Developer ID Application" >> "$GITHUB_ENV"
       - name: Build the Toolbox for macOS
+        if: steps.cache.outputs.cache-hit != 'true'
         run: cd toolbox/cli && "$MAC_DART" run bin/toolbox.dart dev toolbox build macos
       - name: Package the disk image
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
           app=$(ls -d "toolbox/app/build/macos/Build/Products/Release/"*.app | head -1)
           stage=$(mktemp -d)
           cp -R "$app" "$stage/"
           ln -s /Applications "$stage/Applications"
-          mkdir -p build/dist
-          image="build/dist/tempo-toolbox-${TEMPO_VERSION}-macos.dmg"
+          mkdir -p build/toolbox-macos-artifact
+          image=build/toolbox-macos-artifact/tempo-toolbox-macos.dmg
           rm -f "$image"
           hdiutil create -volname 'Tempo Toolbox' -srcfolder "$stage" -ov -format UDZO "$image"
           rm -rf "$stage"
@@ -909,6 +977,11 @@ jobs:
             codesign --force --sign "$TEMPO_CODESIGN_IDENTITY" --timestamp "$image"
           fi
           codesign -dv --verbose=4 "$image" 2>&1 | sed -n '1,8p'
+      - name: Name the disk image for this version
+        run: |
+          set -eu
+          mkdir -p build/dist
+          cp build/toolbox-macos-artifact/tempo-toolbox-macos.dmg "build/dist/tempo-toolbox-${TEMPO_VERSION}-macos.dmg"
           ls -la build/dist
       - name: Notarise and staple the disk image
         if: startsWith(github.ref, 'refs/tags/')
@@ -1015,17 +1088,14 @@ jobs:
   rootfs:
     name: Build rootfs for the Y2
     # The root filesystem is the slow half of the pipeline and only changes
-    # when its inputs do, so it is kept by content: the key is a hash of the
-    # git blobs (and submodule pins) of everything it is made from - the
-    # app, tempod, cadenced's pin, their packages, the rootfs and Bluetooth
-    # sources, the Plymouth theme, the toolchain, the build tool, the locks
-    # and this workflow. A hit re-publishes the kept image without building.
-    # Debian packages come from the network at build time, so a hit also
-    # freezes them until an input changes; bump the salt below to force a
-    # rebuild.
-    needs: [changes, toolchain, build-app, build-daemon, cadence]
+    # when its inputs do, so it is kept by content like every other build
+    # here (.forgejo/inputs.sh). A hit re-publishes the kept image without
+    # building. Debian packages come from the network at build time, so a
+    # hit also freezes them until an input changes; the salt in inputs.sh
+    # forces a rebuild.
+    needs: [changes, build-app, build-daemon, cadence]
     if: >-
-      always() && needs.toolchain.result == 'success'
+      always()
       && needs.build-app.result == 'success'
       && needs.build-daemon.result == 'success'
       && needs.cadence.result == 'success'
@@ -1033,7 +1103,7 @@ jobs:
     runs-on: linux-amd64-container
     timeout-minutes: 180
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
@@ -1056,22 +1126,9 @@ jobs:
           lfs: true
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
-      - name: Compute the rootfs key from its inputs
+      - name: Compute the key from the inputs
         id: key
-        run: |
-          set -eu
-          salt=1
-          inputs=$(git ls-files -s -- \
-            app assets daemon \
-            packages/tempo_core packages/player_api packages/daemon_client \
-            packages/tempo_logger packages/flutter_pi_plymouth_handoff \
-            packages/tempo_data packages/tempo_kms packages/tempo_build \
-            platform/rootfs platform/bluetooth platform/splash/plymouth \
-            platform/toolchain platform/firmware \
-            config.yaml pubspec.yaml pubspec.lock Cargo.toml Cargo.lock \
-            .gitmodules .forgejo/workflows/ci.yml \
-            | sha256sum | cut -c1-40)
-          echo "key=rootfs-$salt-$inputs" | tee -a "$GITHUB_OUTPUT"
+        run: echo "key=$(sh .forgejo/inputs.sh rootfs)" | tee -a "$GITHUB_OUTPUT"
       - name: Restore the rootfs
         id: cache
         uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -1205,9 +1262,9 @@ jobs:
     # privileges: the initramfs with its Plymouth payload, the boot image
     # and the dist package. This runs the build tool's container steps
     # directly, as root inside the toolchain image.
-    needs: [changes, toolchain, recovery, rootfs, splash, kernel]
+    needs: [changes, recovery, rootfs, splash, kernel]
     if: >-
-      always() && needs.toolchain.result == 'success'
+      always()
       && needs.recovery.result == 'success'
       && needs.rootfs.result == 'success'
       && needs.splash.result == 'success'
@@ -1216,7 +1273,7 @@ jobs:
     runs-on: linux-amd64-container
     timeout-minutes: 60
     container:
-      image: ${{ needs.toolchain.outputs.image }}
+      image: ${{ needs.changes.outputs.image }}
       credentials:
         username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
         password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}

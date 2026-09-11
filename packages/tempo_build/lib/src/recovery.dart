@@ -126,11 +126,7 @@ Future<void> ensureRecovery(Repository repo, CommandRunner runner) async {
     'packages/tempo_build/lib/src/kernel.dart',
     'packages/tempo_build/lib/src/context.dart',
   ];
-  for (final directory in [
-    'platform/recovery',
-    'platform/toolchain',
-    'assets/tempo/svg',
-  ]) {
+  for (final directory in ['platform/recovery', 'assets/tempo/svg']) {
     for (final entry in Directory(
       repo.path(directory),
     ).listSync(recursive: true)) {
@@ -146,6 +142,8 @@ Future<void> ensureRecovery(Repository repo, CommandRunner runner) async {
         'rev-parse',
         'HEAD',
       ])).stdout.toString().trim(),
+      // The compilers come from the image, so a new image is a new build.
+      'toolchain': Toolchain(repo, runner).image,
       'files': await cache.hashes(paths),
     },
     () async {

@@ -48,8 +48,7 @@ The end-user commands, `toolbox device`, `backup`, `restore`, `install`,
 
 | Command | What it does |
 | --- | --- |
-| `toolchain build [podman build arguments]` | Build the `tempo-toolchain` image. |
-| `toolchain rebuild [podman build arguments]` | The same with `--no-cache --pull`. |
+| `toolchain pull` | Pull the image pinned as `toolchain.image` in `config.yaml`. |
 | `toolchain run COMMAND [arguments]` | Run one command in the container with the checkout mounted. |
 | `toolchain shell [zsh arguments]` | Open zsh in the container. |
 | `toolchain info` | Inspect the image and print the gcc, rustc and dtc versions. |

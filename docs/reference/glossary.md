@@ -176,7 +176,7 @@ package and file names keep their spelling, so `tempo_core` sorts as a word.
 - **Toolbox.** The host side of Tempo: the installer, the emulator host and a set of device tools, as a desktop app, a browser app and the `toolbox` command line. See [Toolbox overview](../toolbox/overview.md).
 - **toolbox dev.** The developer side of the Toolbox CLI, one area and one action per command. See [The `toolbox dev` command reference](../development/toolbox-dev.md).
 - **toolbox_core.** The Dart package with the operation policy, the SSH transport and the firmware handling shared by the Toolbox GUI and CLI. See [Device operations](../toolbox/device-operations.md).
-- **toolchain container.** `tempo-toolchain`, the Podman image holding every compiler and build tool so the host needs only Dart, Git and Podman. See [Toolchain container](../platform/toolchain.md).
+- **toolchain container.** The shared toolbox image, `git.artificery.dev/artificery/toolbox` at the tag pinned in `config.yaml`, holding every compiler and build tool so the host needs only Dart, Git and Podman. See [Toolchain container](../platform/toolchain.md).
 
 ## U
 

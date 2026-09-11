@@ -51,7 +51,6 @@ Flutter SDKs are pinned because three different things constrain them.
 | `platform/recovery/` | Tempo Recovery: its init, transfer service, UI and build script. |
 | `platform/firmware/` | Vendor binaries; see [Firmware inputs](../platform/firmware-inputs.md). |
 | `platform/diagnostics/` | On-device probe sources and host analysis tools. |
-| `platform/toolchain/` | The `Containerfile`. |
 
 ## The pub workspace
 
@@ -128,8 +127,8 @@ and refuses to continue while any of them is still a pointer.
 
 The pinned versions and how they are provisioned are in
 [Toolchain container](../platform/toolchain.md). The container carries its
-own Rust toolchain and a standalone Dart SDK for the browser tests; neither
-replaces a Flutter pin.
+own Rust toolchain and a standalone Dart SDK, which runs the build tool in CI
+and the browser tests; neither replaces a Flutter pin.
 
 ## The build tree
 

@@ -223,7 +223,7 @@ Host-side variables for the build and `toolbox dev`. Paths below are under
 
 Two more variables are set by the tooling for itself and are not meant to be
 exported by hand: `TEMPO_TOOLCHAIN=1` marks a process already inside the
-`tempo-toolchain` image so `Toolchain.run` executes directly
+toolchain image so `Toolchain.run` executes directly
 (`context.dart`, `rootfs.dart`), and `TEMPO_ROOTFS_LOCK_HELD=1` tells a
 re-entered rootfs command that the checkout lock is already taken
 (`rootfs.dart`).

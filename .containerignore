@@ -1,6 +1,0 @@
-# Only toolchain sources belong in the container build context.
-*
-!platform/
-platform/*
-!platform/toolchain/
-!platform/toolchain/**

@@ -9,6 +9,13 @@
 # otherwise); builds from any other commit carry `<version>~git<date>.<sha>`.
 version: 0.9.0
 
+# The shared build and CI toolchain image: every compiler, SDK and system
+# tool the build needs, published from git.artificery.dev/artificery/toolbox.
+# CI jobs and the local build tool both read this pin; TEMPO_TOOLCHAIN_IMAGE
+# overrides it for one run.
+toolchain:
+  image: git.artificery.dev/artificery/toolbox:953dbb33881e
+
 device:
   # Hostname, and the name written into /etc/hosts.
   hostname: tempo

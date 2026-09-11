@@ -202,15 +202,29 @@ class Toolchain {
       _insideContainer ?? Platform.environment['TEMPO_TOOLCHAIN'] != null;
   static set insideContainer(bool? value) => _insideContainer = value;
   static bool? _insideContainer;
-  Future<int> build(List<String> arguments) => runner.run('podman', [
-    'build',
-    ...arguments,
-    '-t',
-    'tempo-toolchain',
-    '-f',
-    repository.path('platform/toolchain/Containerfile'),
-    repository.root,
-  ]);
+
+  /// The image used when config.yaml does not name one.
+  static const defaultImage =
+      'git.artificery.dev/artificery/toolbox:953dbb33881e';
+
+  /// The published toolchain image: `toolchain.image` in config.yaml, or
+  /// TEMPO_TOOLCHAIN_IMAGE for one run. Read directly so that every caller,
+  /// with or without a loaded configuration, names the same image.
+  String get image {
+    final override = Platform.environment['TEMPO_TOOLCHAIN_IMAGE'];
+    if (override != null && override.isNotEmpty) return override;
+    final config = File(repository.path('config.yaml'));
+    if (config.existsSync()) {
+      final match = RegExp(
+        r'^toolchain:[ \t]*\n(?:[ \t]+[^\n]*\n)*?[ \t]+image:[ \t]*(\S+)',
+        multiLine: true,
+      ).firstMatch(config.readAsStringSync());
+      if (match != null) return match.group(1)!;
+    }
+    return defaultImage;
+  }
+
+  Future<int> pull() => runner.run('podman', ['pull', image]);
   Future<int> run(
     List<String> arguments, {
     String? workingDirectory,
@@ -229,9 +243,14 @@ class Toolchain {
     final exists = await runner.capture('podman', [
       'image',
       'exists',
-      'tempo-toolchain',
+      image,
     ], check: false);
-    if (exists.exitCode != 0) await build([]);
+    if (exists.exitCode != 0) await pull();
+    // The image runs as this user; give it a home of its own under build/
+    // for the SDK and shell caches, so nothing lands in the checkout or
+    // the host's home.
+    final home = Directory(repository.path('build/toolchain-home'))
+      ..createSync(recursive: true);
     return runner.run('podman', [
       'run',
       '--rm',
@@ -239,6 +258,8 @@ class Toolchain {
       if (stdin.hasTerminal) '-t',
       '-v',
       '${repository.root}:${repository.root}',
+      '-e',
+      'HOME=${home.path}',
       for (final path in {
         ...repository.externalGitMetadata,
         ...readOnlyPaths,
@@ -254,7 +275,7 @@ class Toolchain {
         '-e',
         '${entry.key}=${entry.value}',
       ],
-      'tempo-toolchain',
+      image,
       ...arguments,
     ], check: check);
   }

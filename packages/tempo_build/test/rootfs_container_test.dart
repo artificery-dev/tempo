@@ -52,7 +52,7 @@ class RootfsRunner extends CommandRunner {
     if (executable == 'sudo' && failSudo)
       throw BuildFailure('sudo unavailable', 1);
     if (executable == 'sudo' && arguments.contains('TEMPO_ROOTFS_HOST=1')) {
-      final index = arguments.indexOf('tempo-toolchain');
+      final index = arguments.indexOf(Toolchain.defaultImage);
       receivedConfig =
           jsonDecode(File(arguments[index + 3]).readAsStringSync())
               as Map<String, dynamic>;
@@ -118,6 +118,7 @@ Future<void> main(List<String> args) async {
         uid: '1000',
         gid: '1001',
         command: ['shell', '--', 'printf', 'space ; literal'],
+        image: Toolchain.defaultImage,
       );
       expect(
         args,

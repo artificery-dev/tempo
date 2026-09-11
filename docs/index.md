@@ -132,8 +132,8 @@ The operating system underneath the app.
   modem firmware bootstrap that brings up the shared radio hardware.
 - [Firmware inputs](platform/firmware-inputs.md): the stock ROM, the download
   agent, what is carried in Git LFS and what is never committed.
-- [Toolchain container](platform/toolchain.md): the Podman image, cross
-  compilers, Rust and Dart pins.
+- [Toolchain container](platform/toolchain.md): the shared toolbox image,
+  what runs inside it, and the rootful path for the rootfs.
 - [Diagnostics](platform/diagnostics.md): on-device screenshot and probe tools.
 
 ## Porting notes

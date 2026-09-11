@@ -238,13 +238,9 @@ const developerCommands = <String, (String, String)>{
   ),
   'device splash-install': ('', 'Alias for os splash install.'),
   'device splash-harvest': ('', 'Alias for os splash harvest.'),
-  'toolchain build': (
-    '[podman build arguments]',
-    'Build the configured toolchain container; extra arguments go to podman build.',
-  ),
-  'toolchain rebuild': (
-    '[podman build arguments]',
-    'Build the toolchain with --no-cache --pull plus supplied Podman build arguments.',
+  'toolchain pull': (
+    '',
+    'Pull the published toolchain image named by toolchain.image in config.yaml.',
   ),
   'toolchain run': (
     'COMMAND [arguments]',
@@ -258,7 +254,7 @@ const developerCommands = <String, (String, String)>{
     '',
     'Inspect the toolchain image and report compiler/device-tree tool versions.',
   ),
-  'toolchain clean': ('', 'Remove the tempo-toolchain container image.'),
+  'toolchain clean': ('', 'Remove the toolchain image from the local store.'),
   'dist': (
     '[--full] [--with-rootfs]',
     'Package the existing kernel, splash and rootfs into an installer .y2-firmware and checksummed SPFT distribution.\n--full also selects stock boot-chain images; the installer always preserves BOOT1.\nDefault preserves preloader/LK/NVRAM. --with-rootfs is accepted for compatibility; rootfs is already required/included.',
