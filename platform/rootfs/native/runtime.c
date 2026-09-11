@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -29,8 +30,11 @@ int tempo_volume_keys_held(void) {
     return seen == 3;
 }
 
-int tempo_launch(int debug) {
+int tempo_launch(int debug, int first_run) {
     const char *binary = "/usr/local/bin/flutter-pi";
+    // flutter-pi hands Dart no arguments, so the flag travels as an
+    // environment variable.
+    if (first_run) setenv("TEMPO_FIRST_RUN", "1", 1);
     if (debug) {
         execl(binary, binary, "--pixelformat", "RGB565", "/opt/tempo/flutter_assets",
               "--vm-service-port=41200", "--vm-service-host=0.0.0.0",

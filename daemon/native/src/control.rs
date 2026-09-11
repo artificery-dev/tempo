@@ -22,7 +22,7 @@ use std::{
 use serde_json::{Map, json};
 
 use crate::{
-    activation, fdpass, handoff, haptic,
+    activation, fdpass, first_run, handoff, haptic,
     metrics::{Sample, Sysfs},
     output,
     protocol::{self, MAX_REQUEST_LEN, Op},
@@ -219,6 +219,17 @@ fn dispatch(line: &[u8], fds: Vec<OwnedFd>, stream: &UnixStream, state: &State) 
             let reply = match crate::power::request(action) {
                 Ok(()) => protocol::ok_line(Map::new()),
                 Err(error) => protocol::error_line(error),
+            };
+            (reply, After::Nothing)
+        }
+        Op::FirstRun(pending) => {
+            let first_run = first_run::FirstRun::default();
+            let reply = match pending {
+                None => protocol::ok_line(first_run.status()),
+                Some(pending) => match first_run.queue(&pending) {
+                    Ok(()) => protocol::ok_line(Map::new()),
+                    Err(error) => protocol::error_line(error),
+                },
             };
             (reply, After::Nothing)
         }

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'account.dart';
 import 'context.dart';
 import 'process.dart';
 import 'bluetooth.dart';
@@ -268,7 +269,7 @@ class RootfsImage {
     ]) {
       await install(p.join(units, name), 'etc/systemd/system/$name');
     }
-    for (final entry in daemonServiceDropins(config).entries) {
+    for (final entry in daemonServiceDropins(repo, config).entries) {
       write(entry.key, entry.value);
     }
     await unit('enable', [
@@ -618,24 +619,40 @@ Future<void> buildRootfs(RootfsImage image) async {
     // supplies a hash and keys. Every image is the same image.
     await image.chroot(['passwd', '-l', user]);
     await image.chroot(['passwd', '-l', 'root']);
-    image.remove('etc/sudoers.d/10-tempo');
+    image.remove(accountSudoers);
     if (enabled('user.sudoer')) {
       await image.chroot(['usermod', '-aG', 'sudo', user]);
-      if (enabled('user.passwordless_sudo')) {
-        image.write(
-          'etc/sudoers.d/10-tempo',
-          '# Generated from config.yaml\n$user ALL=(ALL:ALL) NOPASSWD: ALL\n',
-        );
-        await image.mode('etc/sudoers.d/10-tempo', '440');
-        await image.chroot([
-          'visudo',
-          '-c',
-          '-q',
-          '-f',
-          '/etc/sudoers.d/10-tempo',
-        ]);
-      }
     }
+    // Everything that names the account is rendered from one set of
+    // templates, which the image keeps so that first run can rename the
+    // account and render them again.
+    final account = Account.fromConfig(config);
+    for (final entry in renderAccountFiles(repo, account).entries) {
+      if (entry.key.startsWith('etc/systemd/system/tempod.')) continue;
+      image.write(entry.key, entry.value);
+    }
+    if (account.passwordlessSudo) {
+      await image.mode(accountSudoers, '440');
+      await image.chroot(['visudo', '-c', '-q', '-f', '/$accountSudoers']);
+    }
+    for (final entry in Directory(
+      repo.path(accountTemplates),
+    ).listSync(recursive: true)) {
+      if (entry is! File || p.basename(entry.path) == 'README.md') continue;
+      final relative = p.relative(
+        entry.path,
+        from: repo.path(accountTemplates),
+      );
+      if (relative == accountSudoers && !account.passwordlessSudo) continue;
+      await image.install(
+        entry.path,
+        'usr/local/lib/tempo-system/account/$relative',
+      );
+    }
+    image.write(
+      'var/lib/tempo/account',
+      '{"user":"$user","uid":$uid,"gid":$gid}\n',
+    );
     image.write(
       'etc/ssh/sshd_config.d/10-tempo.conf',
       'PermitRootLogin ${enabled('rootfs.permit_root_login') ? 'yes' : 'no'}\nPasswordAuthentication yes\n',
@@ -645,14 +662,6 @@ Future<void> buildRootfs(RootfsImage image) async {
       (entry) => p.basename(entry.path).startsWith('ssh_host_'),
     ))
       image.remove(p.relative(file.path, from: image.mount));
-    image.write(
-      'etc/systemd/system/getty@tty1.service.d/autologin.conf',
-      '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin $user --noclear %I \$TERM\n',
-    );
-    image.write(
-      'etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf',
-      '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin $user --keep-baud 115200,38400,9600 %I \$TERM\n[Unit]\nStartLimitIntervalSec=0\n',
-    );
     for (final service in [
       'serial-getty@ttyGS0',
       'systemd-networkd',
@@ -826,13 +835,10 @@ Future<void> buildRootfs(RootfsImage image) async {
     final overlay = Directory(repo.path('platform/rootfs/overlay'));
     if (overlay.existsSync()) {
       await image.stageOverlay();
-      image.write(
-        'etc/systemd/system/tempo.service.d/10-user.conf',
-        '[Unit]\nWants=user@$uid.service\nAfter=user@$uid.service\n\n[Service]\nUser=$user\nGroup=$user\nEnvironment=XDG_RUNTIME_DIR=/run/user/$uid\nEnvironment=LD_PRELOAD=/usr/lib/arm-linux-gnueabihf/libsqlite3.so.0\nEnvironment=PIPEWIRE_CONFIG_NAME=client-rt.conf\nLimitRTPRIO=95\nLimitNICE=-19\nLimitMEMLOCK=4194304\n',
-      );
       image.write('var/lib/systemd/linger/$user', '');
       for (final service in [
         'tempo',
+        'tempo-first-run',
         'tempo-clear-reinstall-flag',
         'tempo-ssh-hostkeys',
         'mt6582-wifi-power',

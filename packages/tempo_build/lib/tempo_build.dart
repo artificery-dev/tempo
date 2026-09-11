@@ -1,5 +1,6 @@
 library;
 
+export 'src/account.dart';
 export 'src/context.dart';
 export 'src/process.dart';
 export 'src/commands.dart'

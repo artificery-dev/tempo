@@ -52,6 +52,9 @@ pub enum Op {
     /// the receiver's current frequency, signal, stereo state, and any
     /// decoded RDS fields. Nothing but `op` is a query.
     Fm(radio::Request),
+    /// `{"op":"first-run"}` asks where first run stands;
+    /// `{"op":"first-run","pending":{...}}` queues what the setup chose.
+    FirstRun(Option<Map<String, Value>>),
     /// Anything else, kept for the log line.
     Unknown(String),
 }
@@ -80,6 +83,8 @@ struct Request {
     // The FM op's field (`on` is shared with screen).
     frequency_khz: Option<i64>,
     seek: Option<i64>,
+    // The first-run op's field.
+    pending: Option<Map<String, Value>>,
 }
 
 /// Parse one request line (without its terminating newline). The error is
@@ -127,6 +132,7 @@ pub fn parse_request(line: &[u8]) -> Result<Op, String> {
             level: req.level,
             step: req.step,
         }),
+        "first-run" => Op::FirstRun(req.pending),
         other => Op::Unknown(other.to_string()),
     })
 }

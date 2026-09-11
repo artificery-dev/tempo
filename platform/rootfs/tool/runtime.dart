@@ -1,3 +1,4 @@
+import 'first_run.dart';
 import 'sd_formatter.dart';
 import 'sd_ejector.dart';
 import 'dart:ffi';
@@ -84,9 +85,10 @@ Future<void> main(List<String> args) async {
         'clear-reinstall-flag',
         'format-sd',
         'eject-sd',
+        'first-run-apply',
       ].contains(args.single)) {
     stdout.writeln(
-      'tempo-system launch|sdmount|clear-reinstall-flag|format-sd|eject-sd',
+      'tempo-system launch|sdmount|clear-reinstall-flag|format-sd|eject-sd|first-run-apply',
     );
     exitCode = args.length == 1 && args.single == '--help' ? 0 : 2;
     return;
@@ -104,10 +106,13 @@ Future<void> main(List<String> args) async {
           stderr.writeln(
             'tempo: both volume keys held - debug mode (attach on :41200)',
           );
+        // Until first run has finished, the app opens on its setup.
+        final firstRun = File(FirstRunApply().done.path).existsSync() ? 0 : 1;
         exitCode = library
-            .lookupFunction<Int32 Function(Int32), int Function(int)>(
-              'tempo_launch',
-            )(held);
+            .lookupFunction<
+              Int32 Function(Int32, Int32),
+              int Function(int, int)
+            >('tempo_launch')(held, firstRun);
       case 'sdmount':
         await Directory(mount).create(recursive: true);
         final type = (await Process.run('/usr/sbin/blkid', [
@@ -137,6 +142,8 @@ Future<void> main(List<String> args) async {
         await formatSdCard();
       case 'clear-reinstall-flag':
         await clearReinstallFlag();
+      case 'first-run-apply':
+        await FirstRunApply().apply();
     }
   } on Object catch (error) {
     stderr.writeln('tempo-system: $error');

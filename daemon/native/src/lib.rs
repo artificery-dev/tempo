@@ -29,6 +29,7 @@ mod activation;
 mod bridge;
 mod control;
 mod fdpass;
+mod first_run;
 mod handoff;
 mod haptic;
 mod metrics;

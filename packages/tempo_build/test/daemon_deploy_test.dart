@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 import 'package:tempo_build/tempo_build.dart';
 import 'package:toolbox_core/live_device.dart';
 import 'package:test/test.dart';
@@ -107,9 +108,27 @@ void main() {
     root = Directory.systemTemp.createTempSync('daemon-test');
     repo = Repository(root.path);
     config = BuildConfig(repo, {
-      'user': {'name': 'tempo'},
+      'user': {'name': 'tempo', 'uid': 1000, 'gid': 1000},
       'daemon': {'socket': '/run/tempod/tempod.sock'},
     });
+    // The drop-ins are rendered from the repository's account templates.
+    final templates = Directory(
+      p.join(
+        Directory.current.path,
+        '..',
+        '..',
+        'platform',
+        'rootfs',
+        'account',
+      ),
+    );
+    for (final entry in templates.listSync(recursive: true)) {
+      if (entry is! File) continue;
+      final relative = p.relative(entry.path, from: templates.path);
+      File(repo.path('platform/rootfs/account/$relative'))
+        ..parent.createSync(recursive: true)
+        ..writeAsBytesSync(entry.readAsBytesSync());
+    }
     bundle = '${root.path}/build/os/daemon/arm/bundle';
     final header = Uint8List(20)..setAll(0, [127, 69, 76, 70, 1, 1]);
     header[18] = 40;
@@ -185,15 +204,15 @@ void main() {
       );
       expect(device.events, isEmpty);
       expect(
-        daemonServiceDropins(config).values.join(),
+        daemonServiceDropins(repo, config).values.join(),
         contains('TEMPOD_PROFILE_HOME=/home/tempo'),
       );
       expect(
-        daemonServiceDropins(config).values.join(),
+        daemonServiceDropins(repo, config).values.join(),
         contains('TEMPOD_SD_ROOT=/mnt/sd'),
       );
       expect(
-        daemonServiceDropins(config).values.join(),
+        daemonServiceDropins(repo, config).values.join(),
         contains(
           'TEMPOD_SETTINGS_FILE=/home/tempo/.config/tempo/settings.json',
         ),

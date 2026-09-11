@@ -1,0 +1,18 @@
+[Unit]
+Description=Apply the device's first-run configuration before anything runs as its user
+# The flasher leaves /first-run-config.json; the on-device setup leaves a
+# pending file. Either one is applied here, as root, before the account it
+# may rename has any process running.
+ConditionPathExists=|/first-run-config.json
+ConditionPathExists=|/var/lib/tempo/first-run/pending.json
+After=local-fs.target systemd-tmpfiles-setup.service
+Before=tempod.socket tempod-native.service tempod.service tempo.service
+Before=getty@tty1.service serial-getty@ttyGS0.service ssh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/tempo-system/tempo-system first-run-apply
+
+[Install]
+WantedBy=sysinit.target

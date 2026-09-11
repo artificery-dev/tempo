@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:toolbox_core/live_device.dart';
+import 'account.dart';
 import 'context.dart';
 import 'process.dart';
 import 'daemon_native.dart';
@@ -92,15 +93,15 @@ Future<VerifiedDaemonBundle> verifyDaemonBundle(String directory) async {
   return VerifiedDaemonBundle(directory, Map.unmodifiable(hashes));
 }
 
-Map<String, String> daemonServiceDropins(BuildConfig config) {
-  final user = config.string('user.name');
-  if (!RegExp(r'^[a-zA-Z0-9_-]+\$?$').hasMatch(user))
-    throw BuildFailure('Invalid daemon service user name');
+/// The drop-ins the daemon's units need for the account, keyed by absolute
+/// path: the tempod entries of the account templates, plus the app's
+/// connection to the daemon, which names no account.
+Map<String, String> daemonServiceDropins(Repository repo, BuildConfig config) {
+  final rendered = renderAccountFiles(repo, Account.fromConfig(config));
   return {
-    '/etc/systemd/system/tempod.socket.d/10-group.conf':
-        '[Socket]\nSocketGroup=$user\n',
-    '/etc/systemd/system/tempod.service.d/20-runtime.conf':
-        '[Service]\nExecStartPre=\nExecStartPre=/usr/local/sbin/tempod --init-credentials --credential-group $user\nEnvironment=TEMPOD_PROFILE_HOME=/home/$user\nEnvironment=TEMPOD_PROFILE_USER=$user\nEnvironment=TEMPOD_SD_ROOT=/mnt/sd\nEnvironment=TEMPOD_SETTINGS_FILE=/home/$user/.config/tempo/settings.json\n',
+    for (final entry in rendered.entries)
+      if (entry.key.startsWith('etc/systemd/system/tempod.'))
+        '/${entry.key}': entry.value,
     '/etc/systemd/system/tempo.service.d/20-daemon.conf':
         '[Service]\nEnvironment=TEMPOD_API_URL=http://127.0.0.1:8765\nEnvironment=TEMPOD_API_TOKEN_FILE=/var/lib/tempod/credentials/api-token\nEnvironment=TEMPOD_OWNER_TOKEN_FILE=/var/lib/tempod/credentials/owner-token\n',
   };
@@ -187,7 +188,7 @@ Future<void> deployDaemonBundle(
   final bundle = await verifyDaemonBundle(
     repo.path('build/os/daemon/arm/bundle'),
   );
-  final generated = daemonServiceDropins(config);
+  final generated = daemonServiceDropins(repo, config);
   for (final name in [
     'tempod.service',
     'tempod-native.service',
