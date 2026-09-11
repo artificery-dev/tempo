@@ -7,6 +7,7 @@ import 'context.dart';
 import 'process.dart';
 import 'splash.dart';
 import 'recovery.dart';
+import 'radio_distribution.dart';
 import 'tempo_layout.dart';
 import 'rootfs.dart' show withRootfsLock;
 
@@ -515,6 +516,10 @@ Future<int> _distributionCommand(
       0)
     throw BuildFailure('Rootfs is mounted; wait for its build to finish');
   await Toolchain(repo, runner).run(['e2fsck', '-fn', rootfs.path]);
+  await Toolchain(
+    repo,
+    runner,
+  ).run(['python3', '-c', checkRadioImageScript, rootfs.path]);
   Directory(images).createSync(recursive: true);
   Directory(spft).createSync(recursive: true);
   await buildRecovery(repo, runner);

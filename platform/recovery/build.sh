@@ -5,13 +5,9 @@ root=$(pwd)
 out="$root/build/recovery"
 kernel_source="$root/platform/kernel/linux"
 mkdir -p "$out/kernel"
-if [ ! -f "$out/kernel/.config" ]; then
-    if [ ! -f "$root/build/os/kernel/.config" ]; then
-        echo 'Build the normal kernel first (toolbox dev os kernel build).' >&2
-        exit 1
-    fi
-    cp "$root/build/os/kernel/.config" "$out/kernel/.config"
-fi
+# Generate a fresh base configuration from source, independent of a player build.
+make -C "$kernel_source" O="$out/kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+sed "s|@ROOT@|$root|g" "$root/platform/kernel/config/y2.config" >> "$out/kernel/.config"
 cc -Wall -Wextra -Werror -I"$kernel_source/drivers/power/supply" platform/recovery/test-charge-policy.c -o "$out/test-charge-policy"
 "$out/test-charge-policy"
 python3 platform/recovery/render-assets.py
@@ -45,18 +41,30 @@ MANIFEST
     --disable SOUND --disable WLAN --disable BT --disable MTK_CONSYS \
     --set-str EXTRA_FIRMWARE '' --set-str EXTRA_FIRMWARE_DIR "$root/platform/firmware"
 make -C "$kernel_source" O="$out/kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
-# Build display modules before embedding them, then rebuild the initramfs.
-make -C "$kernel_source" O="$out/kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j12 zImage
-make -C "$kernel_source" O="$out/kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j12 \
-    drivers/gpu/drm/drm_kms_helper.ko \
-    drivers/gpu/drm/display/drm_display_helper.ko \
-    drivers/gpu/drm/mediatek/mediatek-drm.ko \
-    drivers/gpu/drm/panel/panel-gc9503v.ko \
-    drivers/memory/mtk-smi.ko
+# The display stack is loaded from the initramfs: whatever the resolved
+# configuration left as a module is built and embedded, in load order;
+# helpers the base configuration builds in need nothing. start-display
+# skips modules that are not in /modules.
+config="$out/kernel/.config"
+modules=
+for entry in DRM_KMS_HELPER:drivers/gpu/drm/drm_kms_helper \
+    DRM_DISPLAY_HELPER:drivers/gpu/drm/display/drm_display_helper \
+    MTK_SMI:drivers/memory/mtk-smi \
+    DRM_PANEL_GC9503V:drivers/gpu/drm/panel/panel-gc9503v \
+    DRM_MEDIATEK:drivers/gpu/drm/mediatek/mediatek-drm; do
+    symbol=${entry%%:*}
+    path=${entry#*:}
+    case "$(grep "^CONFIG_$symbol=" "$config" || true)" in
+        *=m) modules="$modules $path" ;;
+        *=y) ;;
+        *) echo "Recovery: CONFIG_$symbol is not enabled in $config" >&2; exit 1 ;;
+    esac
+done
+# shellcheck disable=SC2086
+make -C "$kernel_source" O="$out/kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j12 zImage \
+    $(for module in $modules; do printf '%s.ko ' "$module"; done)
 printf '%s\n' 'dir /modules 0755 0 0' >> "$out/initramfs.list"
-for module in drivers/gpu/drm/drm_kms_helper drivers/gpu/drm/display/drm_display_helper \
-    drivers/memory/mtk-smi drivers/gpu/drm/panel/panel-gc9503v \
-    drivers/gpu/drm/mediatek/mediatek-drm; do
+for module in $modules; do
     printf 'file /modules/%s.ko %s/kernel/%s.ko 0644 0 0\n' "${module##*/}" "$out" "$module" >> "$out/initramfs.list"
 done
 printf 'file /bin/start-display %s/platform/recovery/start-display 0755 0 0\n' "$root" >> "$out/initramfs.list"

@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:tomeui/tomeui.dart';
 
 import 'services/output.dart';
+import 'services/readings.dart';
 import 'services/volume.dart';
 import 'status.dart';
 
@@ -199,6 +201,20 @@ abstract final class VolumeOsd {
       Osd.show((context) => VolumeToast(volume: volume));
 
   static void hide() => Osd.hide();
+
+  /// A level about to be asked for by a control that shows it already -
+  /// the slider in Settings - so the display need not repeat it. The
+  /// mixer's echo of that one level passes [VolumeToasts] in silence;
+  /// any other level, from anywhere, still shows.
+  static void quietly(int level) => _quietLevel = level.clamp(0, 100);
+
+  static int? _quietLevel;
+
+  static bool _consumeQuiet(int level) {
+    if (_quietLevel != level) return false;
+    _quietLevel = null;
+    return true;
+  }
 }
 
 /// Show volume changes regardless of whether they came from local controls
@@ -230,6 +246,7 @@ class _VolumeToastsState extends State<VolumeToasts> {
   }
 
   void _moved() {
+    if (VolumeOsd._consumeQuiet(widget.volume.value.level)) return;
     if (widget.awake) VolumeOsd.show(widget.volume);
   }
 
@@ -483,4 +500,68 @@ class _OsdLayerState extends State<OsdLayer>
       },
     );
   }
+}
+
+/// The card on screen as it comes and goes: a glyph and a word, the way
+/// the output says where the sound went.
+class CardToast extends StatelessWidget {
+  const CardToast({required this.present, super.key});
+
+  final bool present;
+
+  @override
+  Widget build(BuildContext context) => OsdToast(
+    icon: LucideIcons.hardDrive,
+    body: Text(present ? 'SD card inserted' : 'SD card removed'),
+  );
+}
+
+/// Watches the slot and puts a [CardToast] up when a card comes or goes.
+/// Draws nothing itself; sits in the app above the navigator with the
+/// layer. The first reading is the baseline: a card found in the slot at
+/// startup is not an arrival.
+class CardToasts extends StatefulWidget {
+  const CardToasts({required this.storage, super.key});
+
+  final ValueListenable<StorageReading> storage;
+
+  @override
+  State<CardToasts> createState() => _CardToastsState();
+}
+
+class _CardToastsState extends State<CardToasts> {
+  late bool _present;
+
+  @override
+  void initState() {
+    super.initState();
+    _present = widget.storage.value.present;
+    widget.storage.addListener(_moved);
+  }
+
+  @override
+  void didUpdateWidget(CardToasts oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.storage, widget.storage)) {
+      oldWidget.storage.removeListener(_moved);
+      widget.storage.addListener(_moved);
+      _present = widget.storage.value.present;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.storage.removeListener(_moved);
+    super.dispose();
+  }
+
+  void _moved() {
+    final present = widget.storage.value.present;
+    if (present == _present) return;
+    _present = present;
+    Osd.show((context) => CardToast(present: present));
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }

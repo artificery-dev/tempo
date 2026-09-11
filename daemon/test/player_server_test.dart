@@ -189,7 +189,7 @@ void main() {
     final closed = Completer<void>();
     socket.listen(messages.add, onDone: closed.complete);
     socket.add('{"type":"ack","revision":999}');
-    await closed.future.timeout(const Duration(seconds: 2));
+    await closed.future.timeout(const Duration(seconds: 60));
     expect(socket.closeCode, 4002);
     expect((await request('/api/v1/player')).$1, 200);
   });
@@ -201,7 +201,9 @@ void main() {
       server = PlayerServer(
         player: player,
         token: token,
-        ackTimeout: const Duration(milliseconds: 200),
+        // Long enough that a second handshake cannot outlive it on a busy
+        // machine, which would free the slot this test needs occupied.
+        ackTimeout: const Duration(seconds: 5),
         maxClients: 1,
       );
       await server.start();
@@ -210,7 +212,7 @@ void main() {
       expect(await events.moveNext(), isTrue);
       await expectLater(connect(), throwsA(isA<WebSocketException>()));
       expect(
-        await events.moveNext().timeout(const Duration(seconds: 3)),
+        await events.moveNext().timeout(const Duration(seconds: 60)),
         isFalse,
       );
       expect(socket.closeCode, 4008);
@@ -285,7 +287,7 @@ void main() {
       await server.start();
       for (var attempt = 0; attempt < 2; attempt++) {
         final socket = await connect();
-        await socket.drain<void>().timeout(const Duration(seconds: 2));
+        await socket.drain<void>().timeout(const Duration(seconds: 60));
         expect(socket.closeCode, 4004);
         expect(server.clientCount, 0);
         expect(backend.states.hasListener, isFalse);

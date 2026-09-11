@@ -1,3 +1,5 @@
+import 'sd_format_screen.dart';
+import 'sd_eject_screen.dart';
 import 'package:tomeui/tomeui.dart';
 
 import '../content_surface.dart';
@@ -23,6 +25,8 @@ import 'data_storage_screen.dart';
 /// are the player's own, and this is where the tree's keys become widgets.
 abstract final class PlayerSettingScreens {
   static void install() {
+    SettingScreens.register('format-sd', (_) => const SdFormatScreen());
+    SettingScreens.register('eject-sd', (_) => const SdEjectScreen());
     SettingScreens.register('data-storage', (_) => const DataStorageScreen());
     SettingScreens.register(
       'library-roots',

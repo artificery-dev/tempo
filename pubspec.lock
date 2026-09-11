@@ -65,13 +65,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.0"
+  cadence_client:
+    dependency: transitive
+    description:
+      path: "packages/client"
+      ref: main
+      resolved-ref: "77ff7df7a1f1b462accce025b47958255613be5a"
+      url: "https://git.artificery.dev/artificery/cadence.git"
+    source: git
+    version: "1.0.0"
   cadence_media:
     dependency: transitive
     description:
       path: "packages/media"
-      ref: develop
-      resolved-ref: ea737670d2548afc547fb2acb2e1fd9efea32c32
-      url: "ssh://git@pi-cluster-00.neon-bramble.ts.net/artificer/cadence.git"
+      ref: main
+      resolved-ref: "77ff7df7a1f1b462accce025b47958255613be5a"
+      url: "https://git.artificery.dev/artificery/cadence.git"
     source: git
     version: "0.1.0"
   characters:
@@ -759,18 +768,18 @@ packages:
     dependency: transitive
     description:
       name: tomeui
-      sha256: "9b44205fc40d38317b329b31126b7a11a793269d74ce45334a019c1be889680f"
+      sha256: "8b674549bc13331c7edc5d5f9d0fc0b237d7222dabd22b6b318e2b022a336540"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.0"
+    version: "0.3.3"
   tomeui_clickwheel:
     dependency: transitive
     description:
       name: tomeui_clickwheel
-      sha256: "7a2119d3977483a6777e27f264325730331f9384360399116479d7789c463e1e"
+      sha256: "79eb2fe2b3d423855309e6db61cf10fc7e09320983ba1987def49f10c4518f83"
       url: "https://pub.dev"
     source: hosted
-    version: "0.3.0"
+    version: "0.3.3"
   toolbox_core:
     dependency: transitive
     description:

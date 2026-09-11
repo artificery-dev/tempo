@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:file/file.dart';
@@ -43,14 +44,17 @@ class TempoProfilePaths {
     required String home,
     required String configHome,
   }) => TempoProfilePaths(
-    data: fs.path.join(home, '.tempo'),
+    data: fs.path.join(home, '.cadence'),
     config: fs.path.join(configHome, 'tempo'),
   );
-  factory TempoProfilePaths.sd(FileSystem fs, String cardRoot) =>
-      TempoProfilePaths(
-        data: fs.path.join(cardRoot, '.tempo'),
-        config: fs.path.join(cardRoot, '.tempo', 'config'),
-      );
+  factory TempoProfilePaths.sd(
+    FileSystem fs,
+    String cardRoot, {
+    required String config,
+  }) => TempoProfilePaths(
+    data: fs.path.join(cardRoot, '.cadence'),
+    config: config,
+  );
   final String data, config;
 }
 
@@ -65,7 +69,7 @@ class TempoStorageDecision {
   final TempoStoragePolicy policy;
   final TempoStorageLocation location;
 
-  /// Null when SD is selected but absent; callers must not open a device fallback.
+  /// Missing external media falls back at startup; device config stays internal.
   final TempoProfilePaths? activePaths;
   final bool needsPrompt, sdAvailable;
 }
@@ -76,16 +80,22 @@ class TempoStorageRequest {
     this.adoptExisting = false,
     this.replaceExisting = false,
     this.id,
+    this.relocation,
+    this.started = false,
   });
   final TempoStoragePolicy policy;
   final bool adoptExisting, replaceExisting;
   final String? id;
+  final Map<String, Object?>? relocation;
+  final bool started;
   Map<String, Object?> toJson() => {
     'version': 1,
     'policy': policy.name,
     'adoptExisting': adoptExisting,
     'replaceExisting': replaceExisting,
     'id': id,
+    'relocation': relocation,
+    'started': started,
   };
   factory TempoStorageRequest.fromJson(Map<String, dynamic> json) {
     if (json['version'] != 1)
@@ -95,8 +105,30 @@ class TempoStorageRequest {
       adoptExisting: json['adoptExisting'] == true,
       replaceExisting: json['replaceExisting'] == true,
       id: json['id'] as String?,
+      relocation: (json['relocation'] as Map?)?.cast<String, Object?>(),
+      started: json['started'] == true,
     );
   }
+}
+
+/// Backend-owned metadata relocation. Preparation observes the running service;
+/// execution happens after all owners stop. Only the backend interprets data.
+abstract interface class TempoDatastoreMover {
+  Future<Map<String, Object?>> prepare({
+    required String operationId,
+    required String source,
+    required String destination,
+    required bool toCard,
+  });
+  Future<void> execute(Map<String, Object?> intent);
+}
+
+/// Only a backend acknowledgement proving no ownership changes permits this.
+class TempoDatastoreMoveRejected implements Exception {
+  TempoDatastoreMoveRejected(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }
 
 class TempoProfileConflict implements Exception {
@@ -120,6 +152,7 @@ class TempoStorageManager {
     required this.selectorPath,
     this.cardRoot,
     this.checkpoint,
+    this.datastoreMover,
   }) {
     for (final path in [
       devicePaths.data,
@@ -157,12 +190,14 @@ class TempoStorageManager {
   final TempoProfilePaths devicePaths;
   final String selectorPath;
   final String? cardRoot;
+  final TempoDatastoreMover? datastoreMover;
 
   /// Fault-injection seam, normally absent. Throwing simulates interruption.
   final Future<void> Function(String phase)? checkpoint;
   bool _busy = false;
-  TempoProfilePaths? get sdPaths =>
-      cardRoot == null ? null : TempoProfilePaths.sd(fs, cardRoot!);
+  TempoProfilePaths? get sdPaths => cardRoot == null
+      ? null
+      : TempoProfilePaths.sd(fs, cardRoot!, config: devicePaths.config);
   String get _journal => '$selectorPath.transaction';
   String get _pending => '$selectorPath.pending';
   String? _applyingId;
@@ -224,12 +259,60 @@ class TempoStorageManager {
     TempoStorageRequest request, {
     bool replacePending = false,
   }) => _exclusive(() async {
+    if (readPendingRequest()?.started == true) {
+      throw StateError(
+        'A started datastore move must be retried with its original intent',
+      );
+    }
     if ((!replacePending && readPendingRequest() != null) ||
         fs.file(_journal).existsSync())
       throw StateError('A storage request is already pending');
     if (request.adoptExisting && request.replaceExisting)
       throw ArgumentError('Choose adoption or replacement');
     final current = readSelector();
+    if (datastoreMover case final mover?) {
+      if (request.replaceExisting) {
+        throw TempoProfileConflict(
+          'Cadence cannot replace an active datastore. Use the existing library or move to an unused location.',
+        );
+      }
+      final toCard = request.policy == TempoStoragePolicy.yes;
+      if (toCard && !_cardPresent) throw StateError('SD card unavailable');
+      final destination = toCard ? sdPaths!.data : devicePaths.data;
+      final random = Random.secure();
+      final id = List.generate(
+        16,
+        (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+      ).join();
+      Map<String, Object?>? intent;
+      if (request.adoptExisting) {
+        if (!fs
+            .file(fs.path.join(destination, 'library.sqlite'))
+            .existsSync()) {
+          throw StateError(
+            'No Cadence datastore exists at the selected location',
+          );
+        }
+      } else {
+        if (!_cardPresent)
+          throw StateError('SD card required to move the datastore');
+        intent = await mover.prepare(
+          operationId: id,
+          source: toCard ? devicePaths.data : sdPaths!.data,
+          destination: destination,
+          toCard: toCard,
+        );
+      }
+      final prepared = TempoStorageRequest(
+        policy: request.policy,
+        adoptExisting: request.adoptExisting,
+        id: id,
+        relocation: intent,
+      );
+      _write(_pending, prepared.toJson());
+      await _step('intent-persisted');
+      return prepared;
+    }
     if (request.policy == TempoStoragePolicy.yes) {
       if (!_cardPresent) throw StateError('SD card unavailable');
       if (current != TempoStoragePolicy.yes &&
@@ -266,6 +349,9 @@ class TempoStorageManager {
 
   /// For failed restart scheduling, before any startup migration begins.
   Future<void> clearPendingRequest() => _exclusive(() async {
+    if (readPendingRequest()?.started == true) {
+      throw StateError('Cannot discard a started datastore move');
+    }
     if (fs.file(_journal).existsSync())
       throw StateError('Cannot discard a started migration');
     if (fs.file(_pending).existsSync()) fs.file(_pending).deleteSync();
@@ -285,16 +371,38 @@ class TempoStorageManager {
     if (selector.existsSync() &&
         (jsonDecode(selector.readAsStringSync()) as Map)['requestId'] ==
             request.id) {
-      await clearPendingRequest();
+      if (fs.file(_pending).existsSync()) fs.file(_pending).deleteSync();
       return resolveStartup();
     }
     _applyingId = request.id;
     try {
+      if (datastoreMover case final mover?) {
+        if (request.relocation case final intent?) {
+          _write(_pending, {...request.toJson(), 'started': true});
+          await _step('move-started');
+          try {
+            await mover.execute(intent);
+          } on TempoDatastoreMoveRejected {
+            fs.file(_pending).deleteSync();
+            await _step('request-cleared');
+            rethrow;
+          }
+        } else if (!request.adoptExisting) {
+          throw StateError(
+            'Pending selection has no Cadence relocation identity',
+          );
+        }
+        _select(request.policy);
+        await _step('request-applied');
+        fs.file(_pending).deleteSync();
+        await _step('request-cleared');
+        return resolveStartup();
+      }
       final current = readSelector();
       if (request.policy == TempoStoragePolicy.yes) {
-        if (current == TempoStoragePolicy.yes) {
-          if (!_cardPresent || !fs.directory(sdPaths!.data).existsSync())
-            throw StateError('Selected SD profile unavailable');
+        if (current == TempoStoragePolicy.yes &&
+            _cardPresent &&
+            fs.directory(sdPaths!.data).existsSync()) {
           await setPolicy(request.policy);
         } else {
           await switchToSd(
@@ -320,8 +428,11 @@ class TempoStorageManager {
   }
 
   /// No copies occur here. Choosing yes for a new SD profile should use
-  /// switchToSd first. Dialog No leaves ask untouched; Don't Ask Again sets no.
+  /// switchToSd first. Declining the insertion prompt persists Internal (no).
   Future<void> setPolicy(TempoStoragePolicy policy) => _exclusive(() async {
+    if (readPendingRequest()?.started == true) {
+      throw StateError('Finish the pending datastore move first');
+    }
     if (fs.file(_journal).existsSync())
       throw StateError('Recover pending switch first');
     _select(policy);
@@ -330,19 +441,15 @@ class TempoStorageManager {
   Future<TempoStorageDecision> resolveStartup() async {
     await recover();
     final policy = readSelector();
-    final sd = policy == TempoStoragePolicy.yes;
+    final sd =
+        policy == TempoStoragePolicy.yes &&
+        _cardPresent &&
+        fs.directory(sdPaths!.data).existsSync();
     return TempoStorageDecision(
       policy: policy,
       location: sd ? TempoStorageLocation.sd : TempoStorageLocation.device,
-      activePaths: sd
-          ? (_cardPresent && fs.directory(sdPaths!.data).existsSync()
-                ? sdPaths
-                : null)
-          : devicePaths,
-      needsPrompt:
-          policy == TempoStoragePolicy.ask &&
-          _cardPresent &&
-          fs.directory(sdPaths!.data).existsSync(),
+      activePaths: sd ? sdPaths : devicePaths,
+      needsPrompt: policy != TempoStoragePolicy.no && !sd && _cardPresent,
       sdAvailable: _cardPresent,
     );
   }
@@ -433,13 +540,24 @@ class TempoStorageManager {
     return result;
   }
 
-  void _copyTree(String source, String target, {String? exclude}) {
+  void _copyTree(
+    String source,
+    String target, {
+    String? exclude,
+    bool cadenceOnly = false,
+  }) {
     _inventory(source);
     fs.directory(target).createSync(recursive: true);
     if (!fs.directory(source).existsSync()) return;
     for (final entry
         in fs.directory(source).listSync(recursive: true, followLinks: false)) {
       if (exclude != null && _inside(exclude, entry.path)) continue;
+      if (cadenceOnly &&
+          !const {
+            'library.db',
+            'library.db-wal',
+          }.contains(fs.path.relative(entry.path, from: source)))
+        continue;
       final path = fs.path.join(
         target,
         fs.path.relative(entry.path, from: source),
@@ -475,10 +593,7 @@ class TempoStorageManager {
   ) async {
     if (fs.file(_journal).existsSync())
       throw StateError('Recover pending switch first');
-    final targets = [
-      target.data,
-      if (!_inside(target.data, target.config)) target.config,
-    ];
+    final targets = [target.data];
     for (final path in targets) {
       if (fs.typeSync(path, followLinks: false) !=
               FileSystemEntityType.notFound &&
@@ -487,15 +602,6 @@ class TempoStorageManager {
           'Destination exists; explicitly adopt or replace: $path',
         );
       }
-    }
-    if (fs.path.equals(source.config, fs.path.join(source.data, 'config')) ==
-            false &&
-        fs.typeSync(fs.path.join(source.data, 'config'), followLinks: false) !=
-            FileSystemEntityType.notFound &&
-        _inside(target.data, target.config)) {
-      throw TempoProfileConflict(
-        'Device data/config would collide with SD config',
-      );
     }
     final id = DateTime.now().microsecondsSinceEpoch.toString();
     final entries = [
@@ -508,7 +614,7 @@ class TempoStorageManager {
         },
     ];
     final journal = <String, dynamic>{
-      'version': 1,
+      'version': 2,
       'phase': 'preparing',
       'policy': policy.name,
       'requestId': _applyingId,
@@ -517,18 +623,16 @@ class TempoStorageManager {
     };
     _write(_journal, journal);
     await _step('preparing');
-    _copyTree(
-      source.data,
-      entries.first['stage'] as String,
-      exclude: _inside(source.data, source.config) ? source.config : null,
-    );
-    final configTarget = entries.length == 1
-        ? fs.path.join(
-            entries.first['stage'] as String,
-            fs.path.relative(target.config, from: target.data),
-          )
-        : entries[1]['stage'] as String;
-    _copyTree(source.config, configTarget);
+    final stage = entries.first['stage'] as String;
+    if (replace) {
+      // Keep unrelated device/app state. Only Cadence's database is replaced.
+      _copyTree(target.data, stage);
+      for (final name in ['library.db', 'library.db-wal', 'library.db-shm']) {
+        final old = fs.file(fs.path.join(stage, name));
+        if (old.existsSync()) old.deleteSync();
+      }
+    }
+    _copyTree(source.data, stage, cadenceOnly: true);
     for (final entry in entries) {
       entry['files'] = _inventory(entry['stage'] as String);
     }
@@ -539,6 +643,12 @@ class TempoStorageManager {
   }
 
   Future<void> recover() => _exclusive(() async {
+    if (datastoreMover != null) {
+      if (fs.file(_journal).existsSync()) {
+        throw StateError('Unexpected non-Cadence storage transaction');
+      }
+      return; // Cadence owns retry/recovery; never roll back a retired source.
+    }
     if (!fs.file(_journal).existsSync()) return;
     final journal =
         jsonDecode(fs.file(_journal).readAsStringSync())
@@ -556,17 +666,14 @@ class TempoStorageManager {
     await _finish(journal);
   });
   void _validateJournal(Map<String, dynamic> journal) {
-    if (journal['version'] != 1 ||
+    if (journal['version'] != 2 ||
         !['preparing', 'prepared'].contains(journal['phase']) ||
         !['yes', 'no', 'ask'].contains(journal['policy']))
       throw FormatException('Invalid profile journal');
     final target = journal['policy'] == 'yes' ? sdPaths : devicePaths;
     if (target == null)
       throw StateError('SD location needed to recover pending copy');
-    final allowed = [
-      target.data,
-      if (!_inside(target.data, target.config)) target.config,
-    ];
+    final allowed = [target.data];
     final entries = journal['entries'] as List;
     if (entries.length != allowed.length)
       throw FormatException('Invalid copy destinations');

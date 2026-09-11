@@ -94,52 +94,25 @@ void main() {
     );
   });
 
-  testWidgets('a wallpaper left in the home moves into the config folder', (
-    tester,
-  ) async {
-    machine.file('/home/tempo/.wallpaper.png').writeAsBytesSync(swirl);
-    await pump(tester);
-
-    expect((WallpaperSource.image.value as MemoryImage).bytes, swirl);
-    expect(
-      machine.file('/home/tempo/.config/tempo/wallpaper.png').existsSync(),
-      isTrue,
-      reason: 'it is in the config folder now',
-    );
-    expect(
-      machine.file('/home/tempo/.wallpaper.png').existsSync(),
-      isFalse,
-      reason: 'and only there: a move, not a copy',
-    );
-  });
-
-  testWidgets('one already in the config folder wins, and nothing is '
-      'deleted', (tester) async {
-    machine.file('/home/tempo/.wallpaper.png').writeAsBytesSync([1]);
-    machine
-        .file('/home/tempo/.config/tempo/wallpaper.png')
-        .writeAsBytesSync(swirl);
-    await pump(tester);
-
-    expect((WallpaperSource.image.value as MemoryImage).bytes, swirl);
-    expect(
-      machine.file('/home/tempo/.wallpaper.png').readAsBytesSync(),
-      [1],
-      reason: 'the one in the home is left where it is',
-    );
-  });
-
   testWidgets('with none, the player writes the default into the config '
       'folder', (tester) async {
     WallpaperSource.installDefault = true;
     // The wallpaper's own look, which finds nothing, shows the default,
     // and writes it.
+    final written = machine.file('/home/tempo/.config/tempo/wallpaper.jpg');
     await tester.runAsync(() async {
       await pump(tester);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      // Loading the packaged asset and writing it out is real work; wait for
+      // the file rather than for a moment.
+      final deadline = DateTime.now().add(const Duration(seconds: 60));
+      while (!written.existsSync()) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('the default was never written');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
     });
     expect(WallpaperSource.image.value, WallpaperSource.asset);
-    final written = machine.file('/home/tempo/.config/tempo/wallpaper.jpg');
     expect(written.existsSync(), isTrue);
     expect(written.readAsBytesSync(), swirl);
 

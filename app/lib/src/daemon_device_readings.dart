@@ -15,6 +15,11 @@ final class DaemonDeviceReadings {
   final battery = ValueNotifier<BatteryReading>(BatteryReading.unknown);
   final storage = ValueNotifier<StorageReading>(StorageReading.empty);
   late final StreamSubscription<DeviceSnapshot> _subscription;
+  bool _mediaBusy = true;
+  void setMediaBusy(bool value) {
+    _mediaBusy = value;
+    _adopt(client.snapshot);
+  }
 
   void _adopt(DeviceSnapshot state) {
     battery.value = BatteryReading(
@@ -23,7 +28,14 @@ final class DaemonDeviceReadings {
     );
     storage.value = state.cardPath == null
         ? StorageReading.empty
-        : StorageReading(present: true, label: 'SD card', path: state.cardPath);
+        : StorageReading(
+            present: true,
+            label: 'SD card',
+            path: state.cardPath,
+            busy: _mediaBusy || state.cardIoBusy == true
+                ? true
+                : state.cardIoBusy,
+          );
   }
 
   Future<void> close() async {

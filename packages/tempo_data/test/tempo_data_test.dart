@@ -38,19 +38,51 @@ void main() {
       },
     );
     fs.directory('/card').createSync();
-    write('/home/u/.tempo/library.db', 'closed sqlite');
-    write('/home/u/.tempo/applets/foo/state.json', 'applet');
+    write('/home/u/.cadence/library.db', 'closed sqlite');
+    write('/home/u/.cadence/applets/foo/state.json', 'applet');
     write('/home/u/.config/tempo/settings.json', 'settings');
     write('/home/u/.config/tempo/wallpaper.jpg', 'wallpaper');
     write('/card/Music/song.mp3', 'media');
   });
   test(
+    'new card prompts without copying and No survives reinsertion',
+    () async {
+      final initial = await manager(card: null).resolveStartup();
+      expect(initial.location, TempoStorageLocation.device);
+      expect(initial.needsPrompt, false);
+      final inserted = await manager().resolveStartup();
+      expect(inserted.needsPrompt, true);
+      expect(inserted.location, TempoStorageLocation.device);
+      expect(fs.directory('/card/.cadence').existsSync(), false);
+      await manager().setPolicy(TempoStoragePolicy.no);
+      expect((await manager(card: null).resolveStartup()).needsPrompt, false);
+      expect((await manager().resolveStartup()).needsPrompt, false);
+      expect(
+        fs.file('/home/u/.cadence/library.db').readAsStringSync(),
+        'closed sqlite',
+      );
+    },
+  );
+  test('Cadence lives at the home or card root; settings remain XDG', () {
+    final device = TempoProfilePaths.device(
+      fs,
+      home: '/home/u',
+      configHome: '/cfg',
+    );
+    final card = TempoProfilePaths.sd(fs, '/card', config: device.config);
+    expect(device.data, '/home/u/.cadence');
+    expect(card.data, '/card/.cadence');
+    expect(device.config, '/cfg/tempo');
+    expect(card.config, device.config);
+  });
+
+  test(
     'ask default, No once unchanged, dont-ask no and existing SD adoption',
     () async {
       final m = manager();
-      expect((await m.resolveStartup()).activePaths!.data, '/home/u/.tempo');
-      expect((await m.resolveStartup()).needsPrompt, false);
-      write('/card/.tempo/library.db', 'existing');
+      expect((await m.resolveStartup()).activePaths!.data, '/home/u/.cadence');
+      expect((await m.resolveStartup()).needsPrompt, true);
+      write('/card/.cadence/library.db', 'existing');
       expect((await m.resolveStartup()).needsPrompt, true);
       expect(m.readSelector(), TempoStoragePolicy.ask);
       await m.setPolicy(TempoStoragePolicy.no);
@@ -58,62 +90,72 @@ void main() {
       await m.acceptExistingSd();
       expect(
         (await m.resolveStartup()).activePaths!.config,
-        '/card/.tempo/config',
+        '/home/u/.config/tempo',
       );
-      expect(fs.file('/card/.tempo/library.db').readAsStringSync(), 'existing');
+      expect(
+        fs.file('/card/.cadence/library.db').readAsStringSync(),
+        'existing',
+      );
     },
   );
-  test('selected absent SD never opens stale device profile', () async {
-    await manager().setPolicy(TempoStoragePolicy.yes);
-    final result = await manager(card: null).resolveStartup();
-    expect(result.activePaths, isNull);
-    expect(result.sdAvailable, false);
-  });
   test(
-    'roundtrip config, db, applets, wallpaper; media and selector excluded',
+    'absent external library falls back without changing internal settings',
+    () async {
+      await manager().setPolicy(TempoStoragePolicy.yes);
+      final result = await manager(card: null).resolveStartup();
+      expect(result.activePaths!.config, '/home/u/.config/tempo');
+      expect(result.location, TempoStorageLocation.device);
+      expect(result.sdAvailable, false);
+    },
+  );
+  test(
+    'only Cadence data moves; settings, wallpaper and app state stay internal',
     () async {
       final m = manager();
       await m.switchToSd();
       expect(
-        fs.file('/card/.tempo/applets/foo/state.json').readAsStringSync(),
-        'applet',
+        fs.file('/card/.cadence/library.db').readAsStringSync(),
+        'closed sqlite',
       );
+      expect(fs.directory('/card/.cadence/config').existsSync(), false);
+      expect(fs.directory('/card/.cadence/applets').existsSync(), false);
       expect(
-        fs.file('/card/.tempo/config/wallpaper.jpg').readAsStringSync(),
-        'wallpaper',
+        (await m.resolveStartup()).activePaths!.config,
+        '/home/u/.config/tempo',
       );
-      write('/card/.tempo/library.db', 'new');
-      write('/card/.tempo/config/settings.json', 'new settings');
+      write('/card/.cadence/library.db', 'new');
+      // Older card profiles must never override this device's settings.
+      write('/card/.cadence/config/settings.json', 'other device settings');
+      write('/card/.cadence/config/wallpaper.jpg', 'other wallpaper');
       await expectLater(
         m.switchToDevice(),
         throwsA(isA<TempoProfileConflict>()),
       );
       await m.switchToDevice(replaceExisting: true);
-      expect(fs.file('/home/u/.tempo/library.db').readAsStringSync(), 'new');
+      expect(fs.file('/home/u/.cadence/library.db').readAsStringSync(), 'new');
       expect(
         fs.file('/home/u/.config/tempo/settings.json').readAsStringSync(),
-        'new settings',
+        'settings',
       );
-      expect(fs.directory('/home/u/.tempo/config').existsSync(), false);
-      expect(fs.file('/card/Music/song.mp3').readAsStringSync(), 'media');
       expect(
-        fs
-            .directory('/card/.tempo')
-            .listSync(recursive: true)
-            .any((p) => p.path.contains('selector')),
-        false,
+        fs.file('/home/u/.config/tempo/wallpaper.jpg').readAsStringSync(),
+        'wallpaper',
       );
-      expect(m.readSelector(), TempoStoragePolicy.no);
+      expect(
+        fs.file('/home/u/.cadence/applets/foo/state.json').readAsStringSync(),
+        'applet',
+      );
+      expect(fs.directory('/home/u/.cadence/config').existsSync(), false);
     },
   );
   test('existing SD refuses implicit overwrite', () async {
-    write('/card/.tempo/library.db', 'existing');
+    write('/card/.cadence/library.db', 'existing');
     await expectLater(
       manager().switchToSd(),
       throwsA(isA<TempoProfileConflict>()),
     );
     await manager().switchToSd(adoptExisting: true);
-    expect(fs.file('/card/.tempo/library.db').readAsStringSync(), 'existing');
+    expect(fs.file('/card/.cadence/library.db').readAsStringSync(), 'existing');
   });
   test('prepare only persists intent; failed restart clears it', () async {
     final m = manager();
@@ -122,7 +164,7 @@ void main() {
     );
     expect(r.id, isNotNull);
     expect(m.readSelector(), TempoStoragePolicy.ask);
-    expect(fs.directory('/card/.tempo').existsSync(), false);
+    expect(fs.directory('/card/.cadence').existsSync(), false);
     await m.clearPendingRequest();
     expect(m.readPendingRequest(), isNull);
   });
@@ -148,48 +190,51 @@ void main() {
       final m = manager();
       expect(
         (await m.applyPendingAtStartup()).activePaths!.data,
-        '/card/.tempo',
+        '/card/.cadence',
       );
       expect(m.readPendingRequest(), isNull);
       expect(fs.file('$selector.transaction').existsSync(), false);
       expect(
-        fs.file('/card/.tempo/library.db').readAsStringSync(),
+        fs.file('/card/.cadence/library.db').readAsStringSync(),
         'closed sqlite',
       );
       expect(
-        fs.file('/home/u/.tempo/library.db').readAsStringSync(),
+        fs.file('/home/u/.cadence/library.db').readAsStringSync(),
         'closed sqlite',
       );
     });
   }
-  test('two-root replacement recovers after only data was published', () async {
-    await manager().switchToSd();
-    write('/card/.tempo/library.db', 'new');
-    write('/card/.tempo/config/wallpaper.jpg', 'new wall');
-    await manager().prepareRequest(
-      const TempoStorageRequest(
-        policy: TempoStoragePolicy.ask,
-        replaceExisting: true,
-      ),
-    );
-    await expectLater(
-      manager(
-        checkpoint: (p) async {
-          if (p == 'published:0') throw StateError('crash');
-        },
-      ).applyPendingAtStartup(),
-      throwsStateError,
-    );
-    expect(
-      (await manager().applyPendingAtStartup()).policy,
-      TempoStoragePolicy.ask,
-    );
-    expect(fs.file('/home/u/.tempo/library.db').readAsStringSync(), 'new');
-    expect(
-      fs.file('/home/u/.config/tempo/wallpaper.jpg').readAsStringSync(),
-      'new wall',
-    );
-  });
+  test(
+    'library replacement recovers without touching internal wallpaper',
+    () async {
+      await manager().switchToSd();
+      write('/card/.cadence/library.db', 'new');
+      write('/card/.cadence/config/wallpaper.jpg', 'new wall');
+      await manager().prepareRequest(
+        const TempoStorageRequest(
+          policy: TempoStoragePolicy.ask,
+          replaceExisting: true,
+        ),
+      );
+      await expectLater(
+        manager(
+          checkpoint: (p) async {
+            if (p == 'published:0') throw StateError('crash');
+          },
+        ).applyPendingAtStartup(),
+        throwsStateError,
+      );
+      expect(
+        (await manager().applyPendingAtStartup()).policy,
+        TempoStoragePolicy.ask,
+      );
+      expect(fs.file('/home/u/.cadence/library.db').readAsStringSync(), 'new');
+      expect(
+        fs.file('/home/u/.config/tempo/wallpaper.jpg').readAsStringSync(),
+        'wallpaper',
+      );
+    },
+  );
   test('corrupt stage refuses selection and retains recovery', () async {
     await expectLater(
       manager(
@@ -219,7 +264,7 @@ void main() {
       );
       expect(manager().readSelector(), TempoStoragePolicy.ask);
       expect(
-        fs.file('/home/u/.tempo/library.db').readAsStringSync(),
+        fs.file('/home/u/.cadence/library.db').readAsStringSync(),
         'closed sqlite',
       );
       readOnly = false;
@@ -228,7 +273,7 @@ void main() {
     },
   );
   test('symlinks and overlapping selector are rejected', () async {
-    fs.link('/home/u/.tempo/alias').createSync(selector);
+    fs.link('/home/u/.cadence/alias').createSync(selector);
     await expectLater(
       manager().switchToSd(),
       throwsA(isA<TempoProfileConflict>()),
@@ -246,14 +291,14 @@ void main() {
     write(
       '$selector.transaction',
       jsonEncode({
-        'version': 1,
+        'version': 2,
         'phase': 'preparing',
         'policy': 'yes',
         'entries': [
           {
-            'target': '/card/.tempo',
+            'target': '/card/.cadence',
             'stage': '/card/Music',
-            'backup': '/card/.tempo.backup-1',
+            'backup': '/card/.cadence.backup-1',
           },
         ],
       }),
@@ -288,7 +333,7 @@ void main() {
   );
   test('replacement recovers after backup rename before publication', () async {
     await manager().switchToSd();
-    write('/card/.tempo/library.db', 'new');
+    write('/card/.cadence/library.db', 'new');
     await manager().prepareRequest(
       const TempoStorageRequest(
         policy: TempoStoragePolicy.no,
@@ -303,9 +348,9 @@ void main() {
       ).applyPendingAtStartup(),
       throwsStateError,
     );
-    expect(fs.directory('/home/u/.tempo').existsSync(), false);
+    expect(fs.directory('/home/u/.cadence').existsSync(), false);
     await manager().applyPendingAtStartup();
-    expect(fs.file('/home/u/.tempo/library.db').readAsStringSync(), 'new');
+    expect(fs.file('/home/u/.cadence/library.db').readAsStringSync(), 'new');
   });
   test(
     'Windows namespace copy and selector remain filesystem-independent',
@@ -336,7 +381,7 @@ void main() {
       );
       await m.switchToSd();
       expect(
-        win.file(r'D:\.tempo\library.db').readAsStringSync(),
+        win.file(r'D:\.cadence\library.db').readAsStringSync(),
         'windows profile',
       );
       expect((await m.resolveStartup()).location, TempoStorageLocation.sd);

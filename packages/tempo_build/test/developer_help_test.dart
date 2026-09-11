@@ -122,5 +122,8 @@ void main() {
         temp.deleteSync(recursive: true);
       }
     },
+    // Four invocations, each compiling the dispatcher from source; a host
+    // running several jobs at once takes minutes over that.
+    timeout: const Timeout(Duration(minutes: 5)),
   );
 }

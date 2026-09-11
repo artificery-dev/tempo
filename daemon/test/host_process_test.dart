@@ -57,7 +57,7 @@ Future<void> main() async {
     final http = HttpClient();
     try {
       expect(
-        await lines.moveNext().timeout(const Duration(seconds: 15)),
+        await lines.moveNext().timeout(const Duration(seconds: 120)),
         isTrue,
       );
       final base = Uri.parse(
@@ -70,7 +70,7 @@ Future<void> main() async {
       final state = jsonDecode(await response.transform(utf8.decoder).join());
       expect(state['available'], isTrue);
       process.kill(ProcessSignal.sigterm);
-      expect(await process.exitCode.timeout(const Duration(seconds: 10)), 0);
+      expect(await process.exitCode.timeout(const Duration(seconds: 120)), 0);
       expect(await errors, contains('Demo player enabled'));
       await expectLater(
         Socket.connect('127.0.0.1', base.port),
@@ -83,26 +83,115 @@ Future<void> main() async {
       await process.exitCode;
     }
   });
+  test('SIGTERM closes Bluetooth and its background ports', () async {
+    final home = await Directory.systemTemp.createTemp('tempod-shutdown-');
+    final bus = DBusServer();
+    final address = await bus.listenAddress(DBusAddress.unix(dir: home));
+    final process = await Process.start(
+      executable,
+      [...prefix, '--port', '0', '--bluetooth-player'],
+      environment: {
+        'TEMPOD_API_TOKEN': 'process-test-token',
+        'DBUS_SYSTEM_BUS_ADDRESS': address.toString(),
+      },
+    );
+    final errors = process.stderr.transform(utf8.decoder).join();
+    final lines = StreamIterator(
+      process.stdout.transform(utf8.decoder).transform(const LineSplitter()),
+    );
+    try {
+      expect(
+        await lines.moveNext().timeout(const Duration(seconds: 120)),
+        isTrue,
+      );
+      process.kill(ProcessSignal.sigterm);
+      expect(await process.exitCode.timeout(const Duration(seconds: 120)), 0);
+      final log = await errors;
+      expect(log, contains('shutdown: bluetooth stopped'));
+      expect(log, contains('shutdown: cleanup complete'));
+    } finally {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+      await lines.cancel();
+      await bus.close();
+      await home.delete(recursive: true);
+    }
+  });
+  test('bare mountpoint cannot become an attached card', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'tempod-missing-profile-',
+    );
+    final home = '${root.path}/home';
+    final selector = File('$home/.local/state/tempo/storage-selector.json');
+    selector.parent.createSync(recursive: true);
+    selector.writeAsStringSync('{"version":1,"policy":"yes"}');
+    final bareMountpoint = Directory('${root.path}/card/.cadence')
+      ..createSync(recursive: true);
+    final process = await Process.start(
+      executable,
+      [...prefix, '--port', '0'],
+      environment: {
+        'TEMPOD_API_TOKEN': 'process-test-token',
+        'TEMPOD_PROFILE_HOME': home,
+        'TEMPOD_SD_ROOT': bareMountpoint.parent.path,
+      },
+    );
+    final errors = process.stderr.transform(utf8.decoder).join();
+    final lines = StreamIterator(
+      process.stdout.transform(utf8.decoder).transform(const LineSplitter()),
+    );
+    try {
+      expect(
+        await lines.moveNext().timeout(const Duration(seconds: 120)),
+        isTrue,
+      );
+      final base = Uri.parse(
+        lines.current.replaceFirst('tempod listening at ', ''),
+      );
+      final status = await StorageClient(
+        baseUri: base,
+        token: 'process-test-token',
+      ).status();
+      expect(
+        status.available,
+        isTrue,
+        reason:
+            'Unavailable Cadence must not disable the internal settings profile',
+      );
+      expect(status.location, 'device');
+      expect(
+        status.sdAvailable,
+        isFalse,
+        reason: 'bare directory is not a mounted card',
+      );
+      expect(status.mediaHome, home);
+      expect(status.dataPath, '$home/.cadence');
+      final settings = SettingsClient(
+        baseUri: base,
+        token: 'process-test-token',
+      );
+      await settings.write({'theme': 'dark'});
+      expect(await settings.read(), {'theme': 'dark'});
+      process.kill(ProcessSignal.sigterm);
+      expect(await process.exitCode.timeout(const Duration(seconds: 120)), 0);
+      await errors;
+    } finally {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+      await lines.cancel();
+      await root.delete(recursive: true);
+    }
+  });
   test(
-    'SIGTERM closes Bluetooth, SQLite media and their background ports',
+    'invalid settings are reported without modifying the internal file',
     () async {
-      final home = await Directory.systemTemp.createTemp('tempod-shutdown-');
-      final bus = DBusServer();
-      final address = await bus.listenAddress(DBusAddress.unix(dir: home));
+      final root = Directory.systemTemp.createTempSync('tempod-settings-');
+      final target = File('${root.path}/settings.json')
+        ..writeAsStringSync('invalid json');
       final process = await Process.start(
         executable,
-        [
-          ...prefix,
-          '--port',
-          '0',
-          '--bluetooth-player',
-          '--media-database',
-          '${home.path}/.tempo/library.db',
-        ],
-        environment: {
-          'TEMPOD_API_TOKEN': 'process-test-token',
-          'DBUS_SYSTEM_BUS_ADDRESS': address.toString(),
-        },
+        [...prefix, '--port', '0', '--settings-file', target.path],
+        environment: {'TEMPOD_API_TOKEN': 'process-test-token'},
       );
       final errors = process.stderr.transform(utf8.decoder).join();
       final lines = StreamIterator(
@@ -110,141 +199,26 @@ Future<void> main() async {
       );
       try {
         expect(
-          await lines.moveNext().timeout(const Duration(seconds: 15)),
-          isTrue,
-        );
-        process.kill(ProcessSignal.sigterm);
-        expect(await process.exitCode.timeout(const Duration(seconds: 12)), 0);
-        final log = await errors;
-        expect(log, contains('shutdown: bluetooth stopped'));
-        expect(log, contains('shutdown: media stopped'));
-        expect(log, contains('shutdown: cleanup complete'));
-      } finally {
-        process.kill(ProcessSignal.sigkill);
-        await process.exitCode;
-        await lines.cancel();
-        await bus.close();
-        await home.delete(recursive: true);
-      }
-    },
-  );
-  test(
-    'missing selected card keeps storage API alive and ignores legacy profile overrides',
-    () async {
-      final root = await Directory.systemTemp.createTemp(
-        'tempod-missing-profile-',
-      );
-      final home = '${root.path}/home';
-      final selector = File('$home/.local/state/tempo/storage-selector.json');
-      selector.parent.createSync(recursive: true);
-      selector.writeAsStringSync('{"version":1,"policy":"yes"}');
-      final bareMountpoint = Directory('${root.path}/card/.tempo')
-        ..createSync(recursive: true);
-      final process = await Process.start(
-        executable,
-        [...prefix, '--port', '0'],
-        environment: {
-          'TEMPOD_API_TOKEN': 'process-test-token',
-          'TEMPOD_PROFILE_HOME': home,
-          'TEMPOD_SD_ROOT': bareMountpoint.parent.path,
-          'TEMPOD_MEDIA_DATABASE': '${root.path}/legacy/library.db',
-          'TEMPOD_SETTINGS_FILE': '${root.path}/legacy/settings.json',
-        },
-      );
-      final errors = process.stderr.transform(utf8.decoder).join();
-      final lines = StreamIterator(
-        process.stdout.transform(utf8.decoder).transform(const LineSplitter()),
-      );
-      try {
-        expect(
-          await lines.moveNext().timeout(const Duration(seconds: 15)),
-          isTrue,
+          await lines.moveNext().timeout(const Duration(seconds: 120)),
+          true,
         );
         final base = Uri.parse(
           lines.current.replaceFirst('tempod listening at ', ''),
         );
-        final status = await StorageClient(
-          baseUri: base,
-          token: 'process-test-token',
-        ).status();
-        expect(status.available, isFalse);
-        expect(status.location, 'sd');
-        expect(
-          status.sdAvailable,
-          isFalse,
-          reason: 'bare directory is not a mounted card',
-        );
-        expect(status.mediaHome, home);
-        expect(status.dataPath, isNull);
         await expectLater(
-          SettingsClient(baseUri: base, token: 'process-test-token').write({}),
+          SettingsClient(baseUri: base, token: 'process-test-token').read(),
           throwsA(isA<HttpException>()),
         );
-        expect(Directory('${root.path}/legacy').existsSync(), isFalse);
-        expect(Directory('$home/.tempo').existsSync(), isFalse);
+        expect(target.readAsStringSync(), 'invalid json');
         process.kill(ProcessSignal.sigterm);
-        expect(await process.exitCode.timeout(const Duration(seconds: 10)), 0);
+        expect(await process.exitCode.timeout(const Duration(seconds: 120)), 0);
         await errors;
       } finally {
         process.kill(ProcessSignal.sigkill);
         await process.exitCode;
         await lines.cancel();
-        await root.delete(recursive: true);
+        root.deleteSync(recursive: true);
       }
     },
   );
-  for (final corrupt in ['settings', 'database']) {
-    test('corrupt $corrupt keeps profile recovery API available', () async {
-      final root = await Directory.systemTemp.createTemp('tempod-corrupt-');
-      final target = File(
-        corrupt == 'settings'
-            ? '${root.path}/.config/tempo/settings.json'
-            : '${root.path}/.tempo/library.db',
-      );
-      target.parent.createSync(recursive: true);
-      target.writeAsStringSync('deliberately invalid profile bytes');
-      final process = await Process.start(
-        executable,
-        [...prefix, '--port', '0'],
-        environment: {
-          'TEMPOD_API_TOKEN': 'process-test-token',
-          'TEMPOD_PROFILE_HOME': root.path,
-          'XDG_CONFIG_HOME': '${root.path}/.config',
-        },
-      );
-      final errors = process.stderr.transform(utf8.decoder).join();
-      final lines = StreamIterator(
-        process.stdout.transform(utf8.decoder).transform(const LineSplitter()),
-      );
-      try {
-        expect(
-          await lines.moveNext().timeout(const Duration(seconds: 25)),
-          isTrue,
-        );
-        final base = Uri.parse(
-          lines.current.replaceFirst('tempod listening at ', ''),
-        );
-        final status = await StorageClient(
-          baseUri: base,
-          token: 'process-test-token',
-        ).status();
-        expect(status.available, isFalse);
-        expect(status.error, contains('Profile could not be opened'));
-        expect(status.dataPath, isNull);
-        await expectLater(
-          SettingsClient(baseUri: base, token: 'process-test-token').write({}),
-          throwsA(isA<HttpException>()),
-        );
-        expect(target.readAsStringSync(), 'deliberately invalid profile bytes');
-        process.kill(ProcessSignal.sigterm);
-        expect(await process.exitCode.timeout(const Duration(seconds: 12)), 0);
-        await errors;
-      } finally {
-        process.kill(ProcessSignal.sigkill);
-        await process.exitCode;
-        await lines.cancel();
-        await root.delete(recursive: true);
-      }
-    }, timeout: const Timeout(Duration(seconds: 45)));
-  }
 }

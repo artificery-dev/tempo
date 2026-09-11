@@ -11,4 +11,5 @@ After=dev-mmcblk1p1.device
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/lib/tempo-system/tempo-system sdmount
-ExecStop=/bin/umount -l /mnt/sd
+# A requested eject already performed a normal unmount. Missing mount is OK.
+ExecStop=-/bin/umount -l /mnt/sd

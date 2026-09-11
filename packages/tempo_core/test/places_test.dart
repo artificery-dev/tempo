@@ -47,7 +47,7 @@ void main() {
       AppletStore(cardData).fileFor('/apps/files')!.path,
       '/mnt/sd/.tempo/applets/apps.files.json',
     );
-    expect(places.data, '/root/.tempo');
+    expect(places.data, '/root/.local/share/tempo');
   });
 
   test('the root is offered only when it has been asked for', () {

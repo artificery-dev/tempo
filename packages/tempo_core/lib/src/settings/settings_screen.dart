@@ -1,3 +1,4 @@
+import '../power.dart';
 import 'dart:async';
 
 import 'package:tomeui/tomeui.dart';
@@ -534,6 +535,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final node = target.node;
     final bind = node.bind;
     if (bind == null) return;
+    if (bind == 'power.restart' || bind == 'power.shutdown') {
+      Navigator.of(context).push(
+        PowerDialog.route(
+          initialCommand: bind == 'power.restart'
+              ? PowerCommand.restart
+              : PowerCommand.shutDown,
+        ),
+      );
+      return;
+    }
     final confirm = node.confirm;
     if (confirm == null) {
       SettingBindings.invoke(bind, target.path);

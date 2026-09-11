@@ -8,8 +8,11 @@ import 'package:tempod/tempod.dart';
 import 'package:tempod/src/services/remote_player.dart';
 import 'package:test/test.dart';
 
+/// Waits for a condition rather than a duration. The budget is a guard
+/// against a hang, not a statement about speed: a host building several jobs
+/// at once takes its time over a socket round trip.
 Future<void> eventually(bool Function() condition) async {
-  final until = DateTime.now().add(const Duration(seconds: 5));
+  final until = DateTime.now().add(const Duration(seconds: 60));
   while (!condition()) {
     if (DateTime.now().isAfter(until)) {
       fail('Timed out waiting for owner state');
@@ -79,13 +82,14 @@ void main() {
         await player.execute(PlayerCommand.fromJson({'type': 'pause'}));
         expect(readiness.last, isFalse);
         proxy.notifyBluetoothPlaybackReady(true);
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        // Wait for something that does arrive before asserting the stale
+        // readiness never did, so a slow machine cannot pass this vacuously.
+        await eventually(() => proxy.snapshot.status == PlaybackStatus.paused);
         expect(
           readiness.last,
           isFalse,
           reason: 'old daemon revision cannot undo local pause',
         );
-        await eventually(() => proxy.snapshot.status == PlaybackStatus.paused);
         final transitions = <PlaybackStatus>[];
         final observation = proxy.changes.listen(
           (s) => transitions.add(s.status),
@@ -109,7 +113,19 @@ void main() {
           token: 'remote-token',
           ownerToken: 'owner-token',
         );
-        await server.start(port: port);
+        // The owner reconnects to the address it knows, so the new server has
+        // to take the old one's port back. The kernel can still be holding it
+        // for a moment after the close, which is not a failure to bind.
+        final rebind = DateTime.now().add(const Duration(seconds: 60));
+        while (true) {
+          try {
+            await server.start(port: port);
+            break;
+          } on SocketException {
+            if (DateTime.now().isAfter(rebind)) rethrow;
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }
         await eventually(() => proxy.snapshot.available);
         expect(proxy.snapshot.revision, greaterThan(revision));
         expect(readiness.last, isFalse);

@@ -15,8 +15,10 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- kernel cross build -----------------------------------------------------
-# python3 stays because parts of the kernel build and our boot-image packaging
-# are Python; it is not here for U-Boot, which this project does not use.
+# python3 stays because parts of the kernel build, the recovery packer
+# (platform/recovery/pack.py) and the dist rootfs check are Python; boot-image
+# packaging itself is Dart. It is not here for U-Boot, which this project does
+# not use.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-arm-linux-gnueabihf \
         libc6-dev-armhf-cross \
@@ -83,7 +85,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends zsh nodejs unzi
 ENV RUSTUP_HOME=/opt/rustup \
     CARGO_HOME=/opt/cargo \
     PATH=/opt/cargo/bin:$PATH
-ARG RUST_VERSION=1.90.0
+ARG RUST_VERSION=1.92.0
 RUN curl -fsSL https://sh.rustup.rs \
       | sh -s -- -y --no-modify-path --profile minimal \
         --default-toolchain ${RUST_VERSION} \

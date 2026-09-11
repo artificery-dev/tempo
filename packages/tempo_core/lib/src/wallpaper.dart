@@ -115,15 +115,9 @@ abstract final class WallpaperSource {
   static String pathFor(Places places, String ext) =>
       '${places.config}/wallpaper.$ext';
 
-  /// Where a wallpaper put there by an older build still is: a dotfile in
-  /// the player's home.
-  static String legacyPathFor(Places places, String ext) =>
-      '${places.pathOf(Place.home)}/.wallpaper.$ext';
-
   /// Look in [places]'s config folder for a wallpaper and show it; failing
   /// that, show the default and, if [installDefault], write it there.
   static Future<void> load(Places places) async {
-    _migrate(places);
     for (final ext in extensions) {
       final file = places.fileSystem.file(pathFor(places, ext));
       try {
@@ -190,36 +184,6 @@ abstract final class WallpaperSource {
     image.value = MemoryImage(taken.bytes);
     palettes.value = taken.palettes;
     return true;
-  }
-
-  /// Move a wallpaper an older build left in the home into the config
-  /// folder. A move rather than a copy: two files claiming to be the
-  /// wallpaper is how a user ends up replacing the one nothing reads.
-  ///
-  /// A config folder that already has a wallpaper of that kind wins, and
-  /// the one in the home is left where it is - a migration is not a
-  /// license to delete a picture the user might still want.
-  static void _migrate(Places places) {
-    for (final ext in extensions) {
-      final left = places.fileSystem.file(legacyPathFor(places, ext));
-      try {
-        if (!left.existsSync()) continue;
-        final moved = places.fileSystem.file(pathFor(places, ext));
-        if (moved.existsSync()) continue;
-        moved.parent.createSync(recursive: true);
-        try {
-          left.renameSync(moved.path);
-        } on FileSystemException {
-          // A rename across filesystems is not a rename: copy it, and only
-          // then let go of the original.
-          left.copySync(moved.path);
-          left.deleteSync();
-        }
-        debugPrint('wallpaper: moved ${left.path} to ${moved.path}');
-      } on FileSystemException catch (error) {
-        debugPrint('wallpaper: ${left.path} stayed put: ${error.message}');
-      }
-    }
   }
 
   static Future<Uint8List> _defaultBytes() async {

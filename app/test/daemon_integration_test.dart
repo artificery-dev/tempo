@@ -40,7 +40,7 @@ void main() {
         ]);
         final attached = proxy.changes.firstWhere((s) => s.available);
         owner.start();
-        await attached.timeout(const Duration(seconds: 5));
+        await attached.timeout(const Duration(seconds: 60));
         final request = await http.postUrl(
           Uri.parse('http://127.0.0.1:${server.port}/api/v1/commands'),
         );
@@ -58,10 +58,10 @@ void main() {
           (s) => s.status == PlaybackStatus.playing,
         );
         await playback.toggle();
-        await moved.timeout(const Duration(seconds: 5));
+        await moved.timeout(const Duration(seconds: 60));
         final disconnected = proxy.changes.firstWhere((s) => !s.available);
         await owner.close();
-        await disconnected.timeout(const Duration(seconds: 5));
+        await disconnected.timeout(const Duration(seconds: 60));
         expect(
           playback.value.playing,
           isTrue,

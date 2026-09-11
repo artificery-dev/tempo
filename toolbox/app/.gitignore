@@ -49,3 +49,6 @@ app.*.map.json
 # Generated Rust WebAssembly bindings. Build before running Flutter web.
 /web/pkg/
 /web/DA.img
+
+# FVM Version Cache
+.fvm/

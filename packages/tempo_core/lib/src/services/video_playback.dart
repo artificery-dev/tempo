@@ -11,7 +11,8 @@ import 'volume.dart';
 /// A video session owns transport and survives navigation away from Home.
 class VideoPlayback extends ValueNotifier<NowPlaying>
     implements PlaybackService {
-  VideoPlayback() : super(NowPlaying.nothing);
+  VideoPlayback({this.resolvePath}) : super(NowPlaying.nothing);
+  final Future<String> Function(TrackSummary)? resolvePath;
   static final session = ValueNotifier<VideoPlayback?>(null);
   static final keepAwake = ValueNotifier(false);
   static VideoPlayback? get active => session.value;
@@ -60,7 +61,16 @@ class VideoPlayback extends ValueNotifier<NowPlaying>
     if (_disposed || generation != _generation) return;
     error = null;
     final track = queue[index.clamp(0, queue.length - 1)];
-    final next = VideoPlayerController.file(File(track.path));
+    late String path;
+    try {
+      path = await (resolvePath?.call(track) ?? Future.value(track.path));
+    } catch (failure) {
+      error = 'Could not open this video: $failure';
+      if (!_disposed) notifyListeners();
+      return;
+    }
+    if (_disposed || generation != _generation) return;
+    final next = VideoPlayerController.file(File(path));
     controller = next;
     value = NowPlaying(track: track, count: 1);
     next.addListener(_changed);

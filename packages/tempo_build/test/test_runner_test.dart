@@ -15,12 +15,6 @@ class TestRunner extends CommandRunner {
     bool check = true,
   }) async {
     calls.add([executable, ...arguments]);
-    if (arguments.first == 'build') {
-      final output = arguments[arguments.indexOf('--output') + 1];
-      final library = File('$output/bundle/lib/libsqlite3.so');
-      library.parent.createSync(recursive: true);
-      library.writeAsStringSync('fixture');
-    }
     return 0;
   }
 }
@@ -66,12 +60,13 @@ void main() {
           '/build/os/daemon/test-runtime/.dart_tool/package_config.json',
         ),
       );
-      final isolated = jsonDecode(
+      expect(
         File(
           '${root.path}/build/os/daemon/test-runtime/.dart_tool/native_assets.yaml',
-        ).readAsStringSync(),
+        ).existsSync(),
+        isFalse,
+        reason: 'the daemon has no native assets of its own any more',
       );
-      expect(isolated['native-assets'], isNotEmpty);
     },
   );
 }

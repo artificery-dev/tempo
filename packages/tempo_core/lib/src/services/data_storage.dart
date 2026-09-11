@@ -2,6 +2,10 @@ import 'package:flutter/foundation.dart';
 
 enum DataStoragePolicy { yes, no, ask }
 
+abstract interface class RetryableDataStorage {
+  Future<void> retryPending();
+}
+
 @immutable
 class DataStorageStatus {
   const DataStorageStatus({

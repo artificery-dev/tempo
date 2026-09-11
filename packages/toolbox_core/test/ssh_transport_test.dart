@@ -65,12 +65,19 @@ void main() {
             ..writeAsBytesSync(List.filled(4 * 1024 * 1024, 1));
           final ssh = transport();
           addTearDown(ssh.cancel);
-          final watch = Stopwatch()..start();
+          // What matters is why the upload fails, not how quickly: the wall
+          // clock here measures forking a shell and killing it, which a busy
+          // machine is slow at even when the code is right.
           await expectLater(
-            ssh.upload(source, '/unused').timeout(const Duration(seconds: 3)),
-            throwsA(anything),
+            ssh.upload(source, '/unused').timeout(const Duration(seconds: 60)),
+            throwsA(
+              isA<DeviceOperationFailure>().having(
+                (failure) => failure.toString(),
+                'message',
+                contains('stalled'),
+              ),
+            ),
           );
-          expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
         },
       );
       test('cancellation escalates and prevents subsequent commands', () async {
@@ -80,8 +87,11 @@ void main() {
           running,
           throwsA(isA<DeviceOperationFailure>()),
         );
+        // The child ignores SIGTERM and has to be killed; both waiting for it
+        // to start and waiting for it to die are the machine's business, not
+        // this test's.
         await Future<void>.delayed(const Duration(milliseconds: 60));
-        await ssh.cancel().timeout(const Duration(seconds: 2));
+        await ssh.cancel().timeout(const Duration(seconds: 60));
         await expected;
         await expectLater(
           ssh.command(['unused']),

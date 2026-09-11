@@ -7,7 +7,9 @@ operations use the USB transfer service.
 
 ## Build and use
 
-After building the normal kernel, run from the repository root:
+Native desktop and CLI Toolbox builds automatically build Recovery when its
+inputs or packaged outputs change. To build it explicitly, run from the
+repository root:
 
 ```sh
 dart run toolbox/cli/bin/toolbox.dart dev os recovery build

@@ -23,7 +23,12 @@ fn emit(v: Value) {
 }
 fn resource(name: &str) -> Result<PathBuf> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut roots = vec![exe.parent().unwrap().join("recovery")];
+    let beside = exe.parent().unwrap();
+    let mut roots = vec![beside.join("recovery")];
+    // A macOS bundle keeps data out of Contents/MacOS, in Contents/Resources.
+    if let Some(contents) = beside.parent() {
+        roots.push(contents.join("Resources").join("recovery"));
+    }
     for p in std::env::current_dir()
         .map_err(|e| e.to_string())?
         .ancestors()

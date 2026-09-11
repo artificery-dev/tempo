@@ -81,11 +81,13 @@ void main() {
   });
   tearDown(() => directory.deleteSync(recursive: true));
   Future<void> until(bool Function() ready) async {
-    for (var i = 0; i < 100; i++) {
-      if (ready()) return;
+    // A deadline rather than a poll count, so the budget says what it is
+    // worth on a machine that has other work to do.
+    final until = DateTime.now().add(const Duration(seconds: 60));
+    while (!ready()) {
+      if (DateTime.now().isAfter(until)) fail('router did not run');
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
-    fail('router did not run');
   }
 
   Future<int> run() =>
@@ -185,8 +187,10 @@ void main() {
       directory.listSync().whereType<File>().single.readAsStringSync(),
       contains('capture_stopped_at='),
     );
+    // The router is stopped, so give it several of its own periods to prove
+    // it: more time can only make this negative harder to pass by accident.
     final count = host.calls.length;
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await Future<void>.delayed(const Duration(seconds: 1));
     expect(host.calls.length, count);
   });
 }

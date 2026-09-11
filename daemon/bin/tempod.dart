@@ -5,13 +5,18 @@ import 'package:tempod/src/services/storage_host.dart';
 import 'package:tempod/src/services/shutdown.dart';
 import 'package:tempod/src/services/bluetooth_player.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:daemon_client/daemon_client.dart';
 import 'package:tempod/src/services/remote_player.dart';
 import 'package:tempod/src/services/device_monitor.dart';
-import 'package:tempod/src/services/media_host.dart';
+import 'package:tempod/src/services/cadence_process.dart';
+import 'package:tempod/src/services/cadence_roots.dart';
+import 'package:tempod/src/services/card_host.dart';
+import 'package:tempod/src/services/cadence_datastore_mover.dart';
+import 'package:tempod/src/services/cadence_coordinator.dart';
 import 'package:tempod/src/services/settings_host.dart';
 import 'package:tempod/src/services/credentials.dart';
 import 'package:tempod/src/services/service_notify.dart';
@@ -54,10 +59,6 @@ Future<void> main(List<String> arguments) async {
       'owner-token-file',
       help:
           'App owner credential; otherwise TEMPOD_OWNER_TOKEN. Separate from API token.',
-    )
-    ..addOption(
-      'media-database',
-      help: 'Own the library database and scanner at this path.',
     )
     ..addOption('settings-file', help: 'Own the player settings JSON file.')
     ..addOption(
@@ -104,7 +105,9 @@ Future<void> main(List<String> arguments) async {
   RemotePlayer? remote;
   BluetoothPlayer? bluetoothPlayer;
   DeviceMonitor? devices;
-  MediaHost? media;
+  CadenceProcess? cadence;
+  CadenceCoordinator? coordinator;
+  CardHost? cardHost;
   SettingsHost? settings;
   StorageHost? storage;
   ProfileStartupDeadline? profileStartup;
@@ -225,7 +228,8 @@ Future<void> main(List<String> arguments) async {
         profileHome ??
         Platform.environment['HOME'] ??
         Directory.current.path;
-    String? database, settingsPath;
+    String? storePath, settingsPath;
+    var storeKind = 'directory';
     if (profileHome != null) {
       profileStartup = ProfileStartupDeadline()..start();
       const fs = LocalFileSystem();
@@ -255,9 +259,48 @@ Future<void> main(List<String> arguments) async {
           ),
           // An empty mountpoint directory is not an attached SD card.
           cardRoot: monitor.snapshot.cardPath == sdRoot ? sdRoot : null,
+          datastoreMover: CadenceDatastoreMover(
+            volume: () async {
+              final owner = cadence;
+              if (owner == null) throw StateError('Cadence is unavailable');
+              return owner.client.volume();
+            },
+            device: () => monitor.snapshot,
+            user:
+                args.option('profile-user') ??
+                Platform.environment['TEMPOD_PROFILE_USER'] ??
+                'tempo',
+            executable:
+                Platform.environment['CADENCED_EXECUTABLE'] ??
+                '/usr/local/lib/cadenced/bin/cadenced',
+            event: (event) => stderr.writeln(jsonEncode(event)),
+            log: stderr.writeln,
+          ),
+          checkpoint: (_) async {
+            // Flush the filesystem containing the selector and its directory
+            // entries before crossing the datastore ownership boundary.
+            final selector = TempoStorageManager.defaultSelectorPath(
+              fs,
+              profileHome,
+            );
+            final result = await Process.run('/bin/sync', [
+              '-f',
+              fs.path.dirname(selector),
+            ]);
+            if (result.exitCode != 0) {
+              throw StateError(
+                'Could not persist the library storage selection',
+              );
+            }
+          },
         ),
       );
       await storage.initialize();
+      storage.observeCard(devices.cardIdentity);
+      final storageOwner = storage;
+      devices.changes.listen(
+        (_) => storageOwner.observeCard(monitor.cardIdentity),
+      );
       final profile = storage.status;
       if (profile.available) {
         try {
@@ -273,49 +316,109 @@ Future<void> main(List<String> arguments) async {
               user,
             );
           }
-          database = fs.path.join(profile.dataPath!, 'library.db');
+          storePath = profile.dataPath!;
+          storeKind = profile.location == 'sd' ? 'mount' : 'directory';
           settingsPath = fs.path.join(profile.configPath!, 'settings.json');
         } catch (error) {
           storage.unavailable(error);
         }
       }
     } else {
-      database =
-          args.option('media-database') ??
-          Platform.environment['TEMPOD_MEDIA_DATABASE'];
       settingsPath =
           args.option('settings-file') ??
           Platform.environment['TEMPOD_SETTINGS_FILE'];
     }
+    if (settingsPath != null) settings = SettingsHost(settingsPath);
     try {
-      if (database != null) {
-        media = await MediaHost.open(
-          database,
-        ).timeout(const Duration(seconds: 10));
-      }
-      if (settingsPath != null) settings = SettingsHost(settingsPath);
-      if (media != null) {
-        await media
-            .schedule(home: mediaHome, settings: await settings?.read() ?? {})
-            .timeout(const Duration(seconds: 10));
-        final scheduler = media.scheduler!;
-        await devices.refresh();
-        scheduler.observeCard(devices.snapshot.cardPath);
-        devices.changes.listen(
-          (reading) => scheduler.observeCard(reading.cardPath),
+      if (storePath != null) {
+        final user =
+            args.option('profile-user') ??
+            Platform.environment['TEMPOD_PROFILE_USER'] ??
+            'tempo';
+        final uid = int.parse(
+          (await Process.run('id', ['-u', user])).stdout.toString().trim(),
         );
-        settings?.changes.listen(scheduler.configure);
+        final gid = int.parse(
+          (await Process.run('id', ['-g', user])).stdout.toString().trim(),
+        );
+        final fresh = !await File('$storePath/library.sqlite').exists();
+        final card = devices.snapshot.cardPath;
+        cadence = await CadenceProcess.start(
+          socketPath:
+              Platform.environment['CADENCE_SOCKET'] ??
+              '/run/cadenced/media.sock',
+          executable:
+              Platform.environment['CADENCED_EXECUTABLE'] ??
+              '/usr/local/lib/cadenced/bin/cadenced',
+          user: user,
+          uid: uid,
+          gid: gid,
+          arguments: [
+            '--store',
+            storePath,
+            '--store-kind',
+            storeKind,
+            '--native',
+            'true',
+            if (fresh) ...[
+              '--initialize',
+              'true',
+              '--media-root',
+              card == null
+                  ? '.'
+                  : storeKind == 'mount'
+                  ? '.'
+                  : card,
+              if (card != null) ...['--media-mount', card],
+            ],
+          ],
+          log: stderr.writeln,
+          onUnexpectedExit: (code) {
+            stderr.writeln(
+              'cadenced exited unexpectedly ($code); restarting services.',
+            );
+            exitCode = 1;
+            if (!stopped.isCompleted) stopped.complete();
+          },
+        );
+        final bridge = CadenceRoots(
+          client: cadence.client,
+          device: () => devices!.snapshot,
+        );
+        coordinator = CadenceCoordinator(
+          cadence.client,
+          roots: bridge,
+          log: stderr.writeln,
+        );
+        await coordinator.start(await settings?.read() ?? {});
+        cardHost = CardHost(
+          client: cadence.client,
+          roots: bridge,
+          device: () => devices!.snapshot,
+          refreshDevice: () => devices!.refresh(),
+        );
+        final policy = coordinator;
+        String? observedMount = devices.snapshot.cardMountId;
+        devices.changes.listen((reading) {
+          if (reading.cardMountId == observedMount) return;
+          observedMount = reading.cardMountId;
+          unawaited(policy.observeCard());
+        });
+        settings?.changes.listen((value) => unawaited(policy.configure(value)));
       }
     } catch (error) {
       if (storage == null) rethrow;
       failedProfileOwner = true;
-      storage.unavailable(error);
+      // A missing/retired Cadence datastore is a library failure, not a loss
+      // of the internal settings profile. The UI can remain fully usable.
+      stderr.writeln('Media library unavailable: $error');
       await shutdownServices({
-        if (media != null) 'unavailable media': media.close,
-        if (settings != null) 'unavailable settings': settings.close,
+        if (coordinator != null) 'unavailable policy': coordinator.close,
+        if (cadence != null) 'unavailable Cadence': cadence.close,
       }, log: stderr.writeln);
-      media = null;
-      settings = null;
+      cadence = null;
+      coordinator = null;
+      cardHost = null;
     }
     remote = RemotePlayer();
     if (args.flag('bluetooth-player')) {
@@ -330,9 +433,9 @@ Future<void> main(List<String> arguments) async {
       player: demo ?? remote,
       ownerToken: ownerToken.isEmpty ? null : ownerToken,
       deviceMonitor: devices,
-      mediaHost: media,
       settingsHost: settings,
       storageHost: storage,
+      cardHost: cardHost,
       token: token,
       allowedOrigins: origins,
       onError: (_, _) =>
@@ -366,7 +469,8 @@ Future<void> main(List<String> arguments) async {
       if (demo != null) 'demo': demo.close,
       if (remote != null) 'player': remote.close,
       if (devices != null) 'devices': devices.close,
-      if (media != null) 'media': media.close,
+      if (coordinator != null) 'cadence policy': coordinator.close,
+      if (cadence != null) 'cadenced': cadence.close,
       if (settings != null) 'settings': settings.close,
       if (native != null) 'native': native.close,
     }, log: stderr.writeln);
@@ -379,10 +483,6 @@ Future<void> main(List<String> arguments) async {
       // All owners had a cleanup attempt; report failure instead of waiting
       // for systemd's 90-second SIGKILL with no indication of the blocker.
       await stderr.flush();
-      // A failed Cadence isolate initialization can also retain an unanswered
-      // ReceivePort even when its close future completes. The recovery API
-      // stays available until shutdown; after every owner has been stopped,
-      // explicitly end that degraded lifetime so a recovery restart can finish.
       exit(clean ? exitCode : 1);
     }
   }

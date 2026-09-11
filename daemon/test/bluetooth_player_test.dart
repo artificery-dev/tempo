@@ -64,10 +64,15 @@ void main() {
         },
       );
       attach(PlaybackStatus.paused);
+      // Readiness is deliberately delayed, and the test asserts both that it
+      // waits and that it eventually arrives. Two seconds is long enough that
+      // a slow round trip cannot be mistaken for the delay expiring, and the
+      // waits below end as soon as readiness actually changes.
+      const readyDelay = Duration(seconds: 2);
       final player = BluetoothPlayer(
         playback,
         bus: DBusClient(address),
-        readyDelay: const Duration(milliseconds: 80),
+        readyDelay: readyDelay,
         onPlaybackReady: ready.add,
       );
       addTearDown(() async {
@@ -102,19 +107,29 @@ void main() {
         await remote.callMethod(BluetoothPlayer.interface, name, []);
       }
 
+      Future<void> becomesReady() async {
+        final deadline = DateTime.now().add(const Duration(seconds: 60));
+        while (ready.isEmpty || !ready.last) {
+          if (DateTime.now().isAfter(deadline)) fail('readiness never arrived');
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      }
+
       await command('Play');
       await command('Play');
       expect(playback.snapshot.status, PlaybackStatus.playing);
       expect(ready.where((v) => v), isEmpty);
       await command('Pause');
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      // Past the delay the cancelled timer would have fired at, so waiting
+      // longer only makes this negative stronger.
+      await Future<void>.delayed(readyDelay * 2);
       expect(
         ready.where((v) => v),
         isEmpty,
         reason: 'pause cancels stale delayed ready',
       );
       await command('Play');
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await becomesReady();
       expect(ready.last, isTrue);
       await command('Stop');
       expect(playback.snapshot.status, PlaybackStatus.stopped);
@@ -133,13 +148,13 @@ void main() {
       playback.detach();
       expect(ready.last, isFalse);
       attach(PlaybackStatus.playing);
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await becomesReady();
       expect(ready.last, isTrue, reason: 'owner reconnect replays readiness');
       final again = adapter.registered.stream.first;
       await bluez.releaseName('org.bluez');
       await bluez.requestName('org.bluez');
-      await again.timeout(const Duration(seconds: 5));
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await again.timeout(const Duration(seconds: 60));
+      await becomesReady();
       expect(ready.last, isTrue, reason: 'BlueZ reconnect republishes Playing');
     },
   );

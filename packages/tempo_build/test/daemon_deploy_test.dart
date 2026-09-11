@@ -117,7 +117,6 @@ void main() {
     for (final name in [
       'bin/tempod',
       'bin/tempod-native',
-      'lib/libsqlite3.so',
       'lib/libtempod_native.so',
     ]) {
       final file = File('$bundle/$name');
@@ -158,7 +157,7 @@ void main() {
     );
   });
   test('validates architecture, hashes, missing and extra artifacts', () async {
-    expect((await verifyDaemonBundle(bundle)).files.length, 4);
+    expect((await verifyDaemonBundle(bundle)).files.length, 3);
     manifest['target'] = 'x64';
     save();
     await expectLater(verifyDaemonBundle(bundle), throwsA(isA<BuildFailure>()));

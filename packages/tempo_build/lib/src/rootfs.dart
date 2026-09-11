@@ -6,8 +6,10 @@ import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
 import 'bluetooth.dart';
+import 'radio_distribution.dart';
 import 'plymouth.dart';
 import 'daemon_deploy.dart';
+import 'cadence.dart';
 import 'system_runtime.dart';
 import 'rootfs_container.dart';
 
@@ -152,9 +154,12 @@ class RootfsImage {
     final verifiedDaemon = await verifyDaemonBundle(
       repo.path('build/os/daemon/arm/bundle'),
     );
+    final cadenceBundle = repo.path('build/os/cadence/arm/bundle');
+    final cadenceFiles = await verifyCadenceBundle(cadenceBundle);
     final runtime = artifacts.os('runtime');
     final runtimeFiles = await verifySystemRuntime(runtime);
     final radio = artifacts.os('bluetooth');
+    rejectCapturedRadioBundle(Directory(radio));
     final manifest = File(p.join(radio, 'build-manifest.json'));
     if (!manifest.existsSync())
       throw BuildFailure(
@@ -184,14 +189,12 @@ class RootfsImage {
         mode: name == 'bootstrap' ? '755' : '644',
       );
     }
-    for (final file in Directory(
-      p.join(radio, 'fixture'),
-    ).listSync().whereType<File>())
-      await install(
-        file.path,
-        'opt/tempo-modem-diag/fixture/${p.basename(file.path)}',
-        mode: '600',
-      );
+    // Remove captures from an older staged rootfs as well as the old directory.
+    await runner.run('rm', ['-rf', at('opt/tempo-modem-diag/fixture')]);
+    await install(
+      p.join(radio, 'modem_1_2g_n.img'),
+      'opt/tempo-modem-diag/modem_1_2g_n.img',
+    );
     await install(
       p.join(radio, 'tempo-modem-bootstrap.service'),
       'etc/systemd/system/tempo-modem-bootstrap.service',
@@ -248,6 +251,15 @@ class RootfsImage {
     }
     await install(manifestFile.path, 'usr/local/lib/tempod/manifest.json');
     link('usr/local/sbin/tempod', '../lib/tempod/bin/tempod');
+    remove('usr/local/lib/cadenced');
+    for (final relative in [...cadenceFiles.keys, 'manifest.json']) {
+      await install(
+        p.join(cadenceBundle, relative),
+        'usr/local/lib/cadenced/$relative',
+        mode: relative.startsWith('bin/') ? '755' : '644',
+      );
+    }
+    link('usr/local/sbin/cadenced', '../lib/cadenced/bin/cadenced');
     final units = repo.path('daemon/systemd');
     for (final name in [
       'tempod.service',
@@ -368,7 +380,7 @@ Future<int> _rootfsCommand(
   if (['stage', 'shell'].contains(action) && !File(image.image).existsSync())
     throw BuildFailure('Missing rootfs image: ${image.image}');
   if (Platform.environment['TEMPO_ROOTFS_HOST'] != '1' &&
-      Platform.environment['TEMPO_TOOLCHAIN'] != '1') {
+      !Toolchain.insideContainer) {
     if (await image.mounted()) {
       throw BuildFailure(
         'Rootfs image is mounted on the host; close its owner before container use',

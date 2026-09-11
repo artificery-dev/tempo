@@ -544,9 +544,35 @@ const _controls = SettingNode.group(
           id: 'acceleration',
           label: 'Acceleration',
           summary:
-              'Scroll faster to skip items, or for 1.5 seconds in one direction to browse letters',
+              'Scroll faster to skip items, or briefly in one direction to browse letters',
           bind: 'wheel.acceleration',
           defaultValue: true,
+        ),
+        SettingNode.choice(
+          id: 'letters-after',
+          label: 'Letters After',
+          summary: 'How long to scroll one way before the letters open',
+          bind: 'wheel.letterEntry',
+          defaultValue: 600,
+          options: [
+            SettingOption(value: 300, label: '0.3 s'),
+            SettingOption(value: 600, label: '0.6 s'),
+            SettingOption(value: 1000, label: '1 s'),
+            SettingOption(value: 1500, label: '1.5 s'),
+          ],
+        ),
+        SettingNode.choice(
+          id: 'letters-close',
+          label: 'Letters Close',
+          summary: 'How long the letters stay after the wheel stops',
+          bind: 'wheel.letterIdle',
+          defaultValue: 1000,
+          options: [
+            SettingOption(value: 500, label: '0.5 s'),
+            SettingOption(value: 1000, label: '1 s'),
+            SettingOption(value: 2000, label: '2 s'),
+            SettingOption(value: 3000, label: '3 s'),
+          ],
         ),
         SettingNode.toggle(
           id: 'reverse',
@@ -1819,8 +1845,8 @@ const _storage = SettingNode.group(
   children: [
     SettingNode.page(
       id: 'data',
-      label: 'Tempo Data Storage',
-      summary: 'Choose Yes, No or Ask for SD card storage',
+      label: 'Tempo Data Location',
+      summary: 'Internal or External; defaults to External with confirmation',
       screen: 'data-storage',
     ),
     SettingNode.page(
@@ -1836,12 +1862,17 @@ const _storage = SettingNode.group(
       summary: 'View information about the inserted SD card',
       bind: 'storage.card',
     ),
-    SettingNode.action(
-      id: 'eject',
+    SettingNode.page(
+      id: 'eject-sd',
       label: 'Eject SD Card',
-      summary: 'Unmount the SD card before removing it',
-      icon: 'eject',
-      bind: 'storage.eject',
+      summary: 'Finish library work and safely remove the card',
+      screen: 'eject-sd',
+    ),
+    SettingNode.page(
+      id: 'format-sd',
+      label: 'Format SD Card',
+      summary: 'Erase the SD card and format it as exFAT',
+      screen: 'format-sd',
     ),
     SettingNode.divider(id: 'div-files'),
     SettingNode.toggle(

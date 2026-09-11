@@ -30,9 +30,10 @@ void main() {
     // Not yet written: a run of changes writes once.
     final file = store.fileFor(files.path)!;
     expect(file.existsSync(), isFalse);
-    await Future<void>.delayed(AppletState.settle * 2);
+    // The write is debounced; asking for it is how to know it happened.
+    first.state.flush();
     expect(file.existsSync(), isTrue);
-    expect(file.path, '/home/tempo/.tempo/applets/apps.files.json');
+    expect(file.path, '/home/tempo/.local/share/tempo/applets/apps.files.json');
     expect(jsonDecode(file.readAsStringSync()), {
       'open': ['/home/tempo/Music'],
       'showHidden': true,

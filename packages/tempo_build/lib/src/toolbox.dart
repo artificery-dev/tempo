@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'context.dart';
 import 'process.dart';
+import 'recovery.dart';
 import 'toolbox_linux.dart';
 
 /// Normalize public Unix build products without following links out of a bundle.
@@ -25,6 +26,87 @@ Future<void> normalizeToolboxPermissions(
         ? '755'
         : '644';
     await runner.run('chmod', [mode, entry.path]);
+  }
+}
+
+/// Re-sign a macOS bundle once the Toolbox resources are inside it.
+///
+/// `flutter build macos` signs the app before the helper and the recovery
+/// payloads are copied into `Contents/MacOS`, so by the time packaging is done
+/// the seal covers a tree that no longer exists and an unsigned executable sits
+/// inside the bundle. Notarisation rejects either one. Sign the nested
+/// executables first so the bundle signature seals a finished tree.
+///
+/// `TEMPO_CODESIGN_IDENTITY` names the identity, `Developer ID Application` on
+/// a release runner. Without it the bundle is signed ad hoc, which keeps it
+/// runnable on the machine that built it but cannot be notarised or opened
+/// anywhere else.
+Future<void> signMacBundle(
+  Directory bundle,
+  String entitlements,
+  CommandRunner runner,
+) async {
+  final identity = Platform.environment['TEMPO_CODESIGN_IDENTITY'] ?? '-';
+  final distributable = identity != '-';
+  final executables =
+      Directory(p.join(bundle.path, 'Contents/MacOS'))
+          .listSync(followLinks: false)
+          .whereType<File>()
+          .where(_isMachO)
+          .map((entry) => entry.path)
+          .toList()
+        ..sort();
+  // The bundle signature covers its own main executable; signing that one
+  // separately would only be undone below.
+  final main = p.join(
+    bundle.path,
+    'Contents/MacOS',
+    p.basenameWithoutExtension(bundle.path),
+  );
+  for (final executable in executables) {
+    if (executable == main) continue;
+    await runner.run('codesign', [
+      '--force',
+      '--sign',
+      identity,
+      if (distributable) ...['--options', 'runtime', '--timestamp'],
+      executable,
+    ]);
+  }
+  await runner.run('codesign', [
+    '--force',
+    '--sign',
+    identity,
+    '--entitlements',
+    entitlements,
+    if (distributable) ...['--options', 'runtime', '--timestamp'],
+    bundle.path,
+  ]);
+  if (!distributable) {
+    stdout.writeln(
+      'Signed ad hoc: set TEMPO_CODESIGN_IDENTITY to notarise ${bundle.path}',
+    );
+  }
+}
+
+/// Mach-O magic, in both byte orders, plus the fat-binary header. The resources
+/// copied in beside the helper are data and must not be signed as code.
+bool _isMachO(File file) {
+  final handle = file.openSync();
+  try {
+    final magic = handle.readSync(4);
+    if (magic.length < 4) return false;
+    final word = magic[0] << 24 | magic[1] << 16 | magic[2] << 8 | magic[3];
+    return const {
+      0xfeedface,
+      0xfeedfacf,
+      0xcefaedfe,
+      0xcffaedfe,
+      0xcafebabe,
+      0xbebafeca,
+    }.contains(word);
+  } finally {
+    handle.closeSync();
   }
 }
 
@@ -269,6 +351,7 @@ Future<int> toolboxCommand(
       platform,
       ...args,
     ], workingDirectory: app);
+  await ensureRecovery(repo, runner);
   await cargo(['build', '--locked', '--release', '--bin', 'tempo-usb']);
   final helper = File(
     p.join(
@@ -277,15 +360,23 @@ Future<int> toolboxCommand(
       Platform.isWindows ? 'tempo-usb.exe' : 'tempo-usb',
     ),
   );
-  void copyResources(String directory) {
+
+  /// The helper is an executable and goes beside the one that runs it; the
+  /// payloads it reads are data. Everywhere but macOS those are the same
+  /// directory, but a macOS bundle keeps code in Contents/MacOS and data in
+  /// Contents/Resources, and codesign refuses to seal a bundle with anything
+  /// else under MacOS.
+  void copyResources(String directory, {String? data}) {
+    final resources = data ?? directory;
     Directory(directory).createSync(recursive: true);
+    Directory(resources).createSync(recursive: true);
     helper.copySync(p.join(directory, p.basename(helper.path)));
-    loader.copySync(p.join(directory, 'DA.img'));
+    loader.copySync(p.join(resources, 'DA.img'));
     File(
       repo.path('toolbox/linux/70-tempo-recovery.rules'),
-    ).copySync(p.join(directory, '70-tempo-recovery.rules'));
+    ).copySync(p.join(resources, '70-tempo-recovery.rules'));
     final recovery = Directory(repo.path('build/recovery'));
-    final destination = Directory(p.join(directory, 'recovery'));
+    final destination = Directory(p.join(resources, 'recovery'));
     destination.createSync(recursive: true);
     for (final name in ['ramboot-DA.bin', 'payload.bin', 'preloader.bin']) {
       final source = File(p.join(recovery.path, name));
@@ -371,9 +462,22 @@ Future<int> toolboxCommand(
   }
   if (bundles.isEmpty) throw BuildFailure('No $platform GUI bundle produced');
   for (final bundle in bundles) {
-    copyResources(bundle);
+    copyResources(
+      bundle,
+      data: platform == 'macos' ? p.join(p.dirname(bundle), 'Resources') : null,
+    );
     final root = platform == 'macos' ? p.dirname(p.dirname(bundle)) : bundle;
     await normalizeToolboxPermissions(Directory(root), runner);
+    if (platform == 'macos') {
+      await signMacBundle(
+        Directory(root),
+        repo.path(
+          'toolbox/app/macos/Runner/'
+          '${mode == 'release' ? 'Release' : 'DebugProfile'}.entitlements',
+        ),
+        runner,
+      );
+    }
   }
   if (!guiOnly) stdout.writeln('CLI: $cliOut');
   stdout.writeln('GUI: ${bundles.join(', ')}');

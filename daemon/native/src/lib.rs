@@ -33,6 +33,7 @@ mod handoff;
 mod haptic;
 mod metrics;
 mod output;
+mod power;
 mod protocol;
 mod radio;
 mod screen;

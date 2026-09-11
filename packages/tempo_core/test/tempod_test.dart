@@ -15,6 +15,17 @@ void main() {
   var fmOn = false;
   var fmFrequencyKhz = 95500;
 
+  /// Waits for a condition rather than a duration: every service in this
+  /// suite speaks to the stand-in daemon over a real socket, and a machine
+  /// with other work to do is slow over one.
+  Future<void> until(bool Function() ready) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    while (!ready()) {
+      if (DateTime.now().isAfter(deadline)) fail('the daemon never answered');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  }
+
   setUp(() async {
     dir = await Directory.systemTemp.createTemp('tempod-test');
     server = await ServerSocket.bind(
@@ -126,7 +137,7 @@ void main() {
     final tempod = Tempod(socket: '${dir.path}/tempod.sock');
     final screen = DeviceScreen(tempod: tempod);
     // Give the start-up query its turn.
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await until(() => seen.any((request) => request['op'] == 'screen'));
     final off = screen.setOn(false, fade: const Duration(milliseconds: 250));
     expect(screen.value, isFalse, reason: 'the frame fades before the light');
     await off;
@@ -147,7 +158,7 @@ void main() {
       'wake brings the level back', () async {
     final tempod = Tempod(socket: '${dir.path}/tempod.sock');
     final screen = DeviceScreen(tempod: tempod);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await until(() => seen.any((request) => request['op'] == 'screen'));
     seen.clear();
 
     await screen.setDimmed(true);
@@ -186,7 +197,7 @@ void main() {
     expect(battery.value, BatteryReading.unknown);
     // Polling starts with the first listener, and reads at once.
     battery.addListener(() {});
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await until(() => battery.value != BatteryReading.unknown);
     expect(battery.value, const BatteryReading(percent: 63, charging: true));
     expect(seen.last, {'op': 'battery'});
     battery.dispose();
@@ -204,10 +215,15 @@ void main() {
 
   test('the device volume asks where the mixer is, then sets it', () async {
     final tempod = Tempod(socket: '${dir.path}/tempod.sock');
-    final volume = DeviceVolume(tempod: tempod);
+    // A poll long enough not to interleave with what this test sends: the
+    // start-up read is the only one it wants to see arrive on its own.
+    final volume = DeviceVolume(
+      tempod: tempod,
+      period: const Duration(minutes: 5),
+    );
     addTearDown(volume.dispose);
     expect(volume.value, VolumeReading.unknown);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await until(() => volume.value != VolumeReading.unknown);
     expect(volume.value.level, 40, reason: 'the mixer\'s word at start-up');
     expect(seen.last, {'op': 'volume'});
 
@@ -235,10 +251,9 @@ void main() {
     );
     expect(output.value, AudioOutput.speaker);
     output.addListener(() {});
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await until(() => seen.where((r) => r['op'] == 'output').length > 1);
     expect(output.value, AudioOutput.headphones);
     expect(seen.last, {'op': 'output'});
-    expect(seen.where((r) => r['op'] == 'output').length, greaterThan(1));
     output.dispose();
   });
 

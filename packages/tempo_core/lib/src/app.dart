@@ -106,6 +106,9 @@ class _TempoAppState extends State<TempoApp> {
       _file?.watch();
       _storagePaused = false;
     }
+    // The question is asked once per card: taking the card out clears the
+    // way for the next one to ask again.
+    if (!status.cardPresent) _storagePrompted = false;
     if (_storagePrompted ||
         status.busy ||
         status.restarting ||
@@ -114,16 +117,16 @@ class _TempoAppState extends State<TempoApp> {
     }
     final navigator = TempoApp._navigator.currentState;
     if (navigator == null) return;
-    _storagePrompted = true;
-    if (status.policy != DataStoragePolicy.ask ||
+    if (status.policy == DataStoragePolicy.no ||
         !status.promptAvailable ||
-        !status.cardPresent ||
-        !status.cardProfileExists) {
+        !status.cardPresent) {
       return;
     }
+    _storagePrompted = true;
     unawaited(
       navigator.push(
         DialogRoute<void>(
+          barrierDismissible: false,
           theme: UiScale.regular.theme(Appearance.brightness.value),
           builder: (context) => DataStoragePrompt(
             controller: controller,
@@ -185,6 +188,9 @@ class _TempoAppState extends State<TempoApp> {
     PlayerSettingScreens.install();
     _dataStorage = (widget.services ?? PlayerServices.fallback).dataStorage;
     _dataStorage?.beforeChange = () async {
+      final services = widget.services ?? PlayerServices.fallback;
+      await services.playback.stop();
+      await VideoPlayback.active?.stop();
       await _openingSettings;
       AppletState.flushForStorageChange();
       await _file?.flushForStorageChange();
@@ -238,7 +244,12 @@ class _TempoAppState extends State<TempoApp> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([Appearance.theme, WheelSettings.feel]),
+      listenable: Listenable.merge([
+        Appearance.theme,
+        WheelSettings.feel,
+        WheelSettings.letterEntry,
+        WheelSettings.letterIdle,
+      ]),
       // The theme moves whenever the scale does, so the scale read here is
       // always the one the theme was made at.
       builder: (context, _) =>
@@ -296,6 +307,8 @@ class _TempoAppState extends State<TempoApp> {
               },
               child: WheelAcceleration(
                 enabled: WheelSettings.feel.value.acceleration,
+                letterEntry: WheelSettings.letterEntry.value,
+                letterIdle: WheelSettings.letterIdle.value,
                 surfaceBuilder: (context, child) => ListenableBuilder(
                   listenable: Backdropped.changes,
                   builder: (context, _) {
@@ -335,6 +348,7 @@ class _TempoAppState extends State<TempoApp> {
                       // notice.)
                       VolumeToasts(volume: services.volume, awake: awake),
                       OutputToasts(output: services.output),
+                      CardToasts(storage: services.storage),
                       const OsdLayer(),
                       Positioned(
                         bottom: 2,

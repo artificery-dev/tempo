@@ -1,7 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cadence_media/cadence_media.dart';
+// Cadence's media package re-exports package:file; the host's own
+// dart:io files are the ones this library touches directly.
+import 'package:cadence_media/cadence_media.dart'
+    hide Directory, File, FileSystemEntity, Link;
+import 'package:drift/native.dart';
+import 'package:file/local.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
@@ -10,7 +15,8 @@ import 'readings.dart';
 export 'package:cadence_media/cadence_media.dart'
     show
         ArtworkPolicy,
-        IdentityHash,
+        ExtractorBuilder,
+        MediaDatabase,
         ScanPolicy,
         ScanState,
         ScanStatus,
@@ -23,7 +29,7 @@ enum LibrarySection {
   recordings('Recordings', 'mic', LibraryType.music),
   audiobooks('Audiobooks', 'book-audio', LibraryType.books),
   shows('Shows', 'tv', LibraryType.shows),
-  movies('Movies', 'film', LibraryType.videos);
+  movies('Movies', 'film', LibraryType.movies);
 
   const LibrarySection(this.label, this.icon, this.type);
   final String label;
@@ -105,6 +111,19 @@ abstract class LibraryService {
   Future<void> dispose();
 }
 
+/// Shelf and folder controls shared by the device client and emulator.
+abstract class CollectionLibrary implements LibraryService {
+  ValueListenable<List<TrackSummary>> shelf(LibrarySection section);
+  bool isVideo(TrackSummary track);
+  List<String> rootsFor(LibrarySection section);
+  void configureFolders(Object? value);
+  LibraryRoots? get locations;
+  String encodeFolderPath(String path);
+  set scanOnStartup(bool value);
+  set scanOnCard(bool value);
+  set recheck(String value);
+}
+
 /// A library with nothing in it and nowhere to look: what a widget gets
 /// when nobody installed one, and what a test that never asks for music
 /// mounts.
@@ -138,25 +157,20 @@ typedef LibraryRoots = List<String> Function();
 
 /// The library over Cadence's media service.
 ///
-/// The service runs in its own isolate ([MediaServer.spawn]) and owns the
-/// database; this end speaks to it through a [MediaClient] and keeps the
-/// shelf - the track list - in memory for the screens. One "Music"
-/// library is made on first run and every scan claims whatever [roots]
-/// answers that exists: the card's Music folder, the player's own.
+/// The service is hosted in this process ([_host]) and owns the database;
+/// this end speaks to it through a [MediaClient] and keeps the shelf - the
+/// track list - in memory for the screens. One "Music" library is made on
+/// first run and every scan claims whatever [roots] answers that exists:
+/// the card's Music folder, the player's own. The player itself no longer
+/// uses this: it browses through cadenced (see [CadenceMediaLibrary]); the
+/// emulator and tests keep the in-process library.
 ///
-/// Scans run under [playerPolicy] by default - sampled hashes over a
-/// quarter megabyte of each end, and the pictures deferred - which is
-/// what a card of a hundred gigabytes on a Cortex-A7 can afford: with the
-/// covers decoded during the scan it indexed a file every two seconds;
-/// without, twelve a second. The pictures are made afterwards by the
-/// service's artwork queue, at low priority, the rows on screen first.
-class MediaLibrary implements LibraryService {
+/// Scans run under [playerPolicy] by default, with the pictures deferred:
+/// the covers are made afterwards by the service's artwork queue, the rows
+/// on screen first.
+class MediaLibrary implements CollectionLibrary {
   /// The player's scan budget.
-  static const playerPolicy = ScanPolicy(
-    identity: IdentityHash.sampled,
-    artwork: ArtworkPolicy.deferred,
-    hashSpan: 256 * 1024,
-  );
+  static const playerPolicy = ScanPolicy(artwork: ArtworkPolicy.deferred);
 
   /// Opens the database at [databasePath] (null: in memory) and comes
   /// up. [roots] says where to look; [storage] - the card - is watched,
@@ -181,7 +195,7 @@ class MediaLibrary implements LibraryService {
     LibraryRoots? locations,
   }) : this.over(
          transport == null
-             ? _spawn(databasePath, policy)
+             ? _host(databasePath, policy)
              : Future.value(MediaClient(transport, onClose: closeTransport)),
          roots: roots,
          daemonScheduled: daemonScheduled,
@@ -211,14 +225,17 @@ class MediaLibrary implements LibraryService {
     if (!daemonScheduled) _storage?.addListener(_storageMoved);
   }
 
-  static Future<MediaClient> _spawn(String? path, ScanPolicy policy) {
+  static Future<MediaClient> _host(String? path, ScanPolicy policy) async {
     if (path != null) Directory(p.dirname(path)).createSync(recursive: true);
-    // Last in line for the CPU, the service and every worker it spawns:
-    // the wheel on a small machine must not wait on a card being read.
-    return MediaServer.spawn(
-      databasePath: path,
+    // The database on its own isolate: a scan's writes and a shelf's reads
+    // must not stall the wheel, as they would on the UI isolate.
+    return hostMediaService(
+      MediaDatabase(
+        path == null
+            ? NativeDatabase.memory()
+            : NativeDatabase.createInBackground(File(path)),
+      ),
       policy: policy,
-      lowPriority: true,
     );
   }
 
@@ -241,6 +258,7 @@ class MediaLibrary implements LibraryService {
   String? _remoteVersion;
   final LibraryRoots _roots;
   final List<String> Function(LibrarySection)? sectionRoots;
+  @override
   final LibraryRoots? locations;
   final _ids = <LibrarySection, int>{};
   final _shelves = <LibrarySection, ValueNotifier<List<TrackSummary>>>{};
@@ -248,13 +266,19 @@ class MediaLibrary implements LibraryService {
   Map<String, List<String>> _configured = {};
   final _defaultRoots = <LibrarySection, Set<String>>{};
 
+  @override
   ValueListenable<List<TrackSummary>> shelf(LibrarySection section) =>
       section == LibrarySection.music
       ? tracks
       : _shelves.putIfAbsent(section, () => ValueNotifier(const []));
 
+  @override
+  String encodeFolderPath(String path) => path;
+
+  @override
   bool isVideo(TrackSummary track) => _videoFiles.contains(track.fileId);
 
+  @override
   List<String> rootsFor(LibrarySection section) {
     final configured = _configured[section.name];
     if (configured != null) return configured;
@@ -268,6 +292,7 @@ class MediaLibrary implements LibraryService {
 
   /// Missing cards keep their roots; an explicit settings change releases
   /// a removed root on the next scan without deleting its files.
+  @override
   void configureFolders(Object? value) {
     _configured = {
       if (value is Map)
@@ -411,9 +436,20 @@ class MediaLibrary implements LibraryService {
                   _summary(item, nextVideoFiles),
             ];
       if (_disposed) return;
+      // Rows under a root the shelf knows, and only where that root can be
+      // reached right now: a card's tracks leave the shelf with the card,
+      // whatever the database still remembers of them, and come back with
+      // it - which is what the device does, and what the emulator cannot
+      // learn from its disk, where the folder behind the card stays put.
       final roots = rootsFor(entry.key);
+      final reachable = locations?.call();
       final visible = items
-          .where((item) => roots.any((root) => p.isWithin(root, item.path)))
+          .where(
+            (item) =>
+                roots.any((root) => p.isWithin(root, item.path)) &&
+                (reachable == null ||
+                    reachable.any((where) => p.isWithin(where, item.path))),
+          )
           .toList();
       nextShelves[entry.key] = visible;
     }
@@ -462,6 +498,9 @@ class MediaLibrary implements LibraryService {
     final present = _storage!.value.present;
     final was = _cardPresent;
     _cardPresent = present;
+    // The shelves follow the slot at once, whatever the reading means for
+    // scanning: what is under a root that just went away leaves the shelf.
+    if (present != was) unawaited(_refresh());
     // The first reading is the baseline, not an arrival.
     if (was == null || present == was) return;
     _cardScan?.cancel();
@@ -740,4 +779,47 @@ abstract final class MusicShelf {
     }
     return folded;
   }
+}
+
+/// Cadence's media service over [db] and the host's own files, in this
+/// process: what the emulator runs and what tests host in memory. Cadence
+/// reads and writes media through the file system injected for the zone it
+/// runs in, so the service is built and every request answered inside that
+/// zone. [buildExtractor] substitutes the tag readers (tests use a canned
+/// tier); deferred artwork is made afterwards by the queue.
+Future<MediaClient> hostMediaService(
+  MediaDatabase db, {
+  ScanPolicy policy = MediaLibrary.playerPolicy,
+  ExtractorBuilder buildExtractor = defaultMediaExtractor,
+}) async {
+  const fileSystem = LocalFileSystem();
+  return withMediaFileSystem(fileSystem, () {
+    final artwork = ArtworkQueue(
+      db,
+      buildExtractor: buildExtractor,
+      thumbnailSide: policy.thumbnailSide,
+    );
+    final coordinator = ScanCoordinator(
+      db,
+      scanner: LibraryScanner(
+        db,
+        buildExtractor: buildExtractor,
+        policy: policy,
+      ),
+      onFinished: (id) => unawaited(artwork.sweep(id)),
+    );
+    final service = MediaService(
+      db,
+      coordinator: coordinator,
+      artwork: artwork,
+    );
+    return MediaClient(
+      (request) => withMediaFileSystem(
+        fileSystem,
+        () async =>
+            (await service.handle(ServiceRequest.fromMap(request))).toMap(),
+      ),
+      onClose: () => withMediaFileSystem(fileSystem, service.close),
+    );
+  });
 }

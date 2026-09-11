@@ -1,3 +1,5 @@
+import 'modem_runtime.dart';
+import 'modem_filesystem.dart';
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
@@ -133,10 +135,10 @@ final class ModemHardware {
     );
   }
 
-  void initialize(ModemFixture fixture) {
+  void initialize(Uint8List firmware) {
     region(modemRom).fillRange(0, modemRomSize, 0);
-    region(modemRom).setRange(0, fixture.firmware.length, fixture.firmware);
-    region(modemSmem).setAll(0, fixture.smem);
+    region(modemRom).setRange(0, firmware.length, firmware);
+    region(modemSmem).setAll(0, modemSharedMemory());
     const invalid = 0x40000000;
     final mappings = <int, List<int>>{
       0x300: [
@@ -164,7 +166,7 @@ final class ModemHardware {
     }
   }
 
-  Future<void> run(ModemFixture fixture, Directory output) async {
+  Future<void> run(ModemFileSystem filesystem, Directory output) async {
     await powerOn();
     write(0x20050000, 0x2200);
     write(0x2019379c, 0x3567c766);
@@ -172,13 +174,14 @@ final class ModemHardware {
     write(0x20195488, 0xa3b66175);
     final deadline = clock.elapsed + const Duration(seconds: 30);
     Duration? readyAt;
+    var lastRequest = clock.elapsed;
     var stage = 0, rx = 0, served = 0;
     final smem = region(modemSmem);
     while (clock.elapsed < deadline) {
       checkCancellation();
       if (readyAt != null &&
           clock.elapsed - readyAt >= const Duration(seconds: 5) &&
-          served == fixture.exchanges.length) {
+          clock.elapsed - lastRequest >= const Duration(seconds: 5)) {
         modemLog(
           'Post-ready initialization complete; consumed $served FS records',
         );
@@ -248,21 +251,9 @@ final class ModemHardware {
             smem.sublist(offset, offset + size),
           );
           final request = parseModemRequest(packet);
-          late final Uint8List reply;
-          if (request.restoreQuery) {
-            reply = fixture.restoreReply;
-          } else {
-            if (served >= fixture.exchanges.length ||
-                !request.same(fixture.exchanges[served].$1)) {
-              await File(
-                '${output.path}/unexpected-fs-$served.bin',
-              ).writeAsBytes(packet);
-              throw StateError(
-                'FS request $served differs from captured startup',
-              );
-            }
-            reply = fixture.exchanges[served++].$2;
-          }
+          final reply = filesystem.respond(request);
+          lastRequest = clock.elapsed;
+          served++;
           smem.setRange(offset, offset + reply.length, reply);
           await send([address, reply.length, 15, reserved]);
         } else {

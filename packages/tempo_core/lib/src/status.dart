@@ -498,6 +498,7 @@ class StatusGlyphs extends StatelessWidget {
         Playback.state,
         services.bluetooth,
         services.wifi,
+        services.storage,
       ]),
       builder: (context, _) {
         final bluetooth = services.bluetooth.value;
@@ -506,6 +507,18 @@ class StatusGlyphs extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           spacing: theme.space.x3,
           children: [
+            if (services.storage.value.present &&
+                services.storage.value.busy != false)
+              Semantics(
+                label: services.storage.value.busy == true
+                    ? 'SD card in use'
+                    : 'SD card activity unknown',
+                child: Icon(
+                  LucideIcons.hardDriveDownload,
+                  size: size,
+                  color: color,
+                ),
+              ),
             if (StatusReadings.playGlyph.value &&
                 Playback.state.value != PlaybackState.stopped)
               const PlayStateGlyph(),

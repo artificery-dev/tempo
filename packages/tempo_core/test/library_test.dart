@@ -1,6 +1,13 @@
+// The library cases scan real files through drift on a background isolate,
+// which a CI host running several jobs at once does not always finish in the
+// default half minute.
+@Timeout(Duration(minutes: 3))
+library;
+
 import 'dart:io';
 
-import 'package:cadence_media/cadence_media.dart';
+import 'package:cadence_media/cadence_media.dart'
+    hide Directory, File, FileSystemEntity, Link;
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,22 +41,11 @@ MediaExtractor _buildCanned() => const MediaExtractor([_CannedTier()]);
 /// The service in process over a memory database, with the canned tier
 /// on the calling isolate - the shape [MediaLibrary.over] takes. Hand in
 /// a [db] to open a second library over the same one.
-Future<MediaClient> _client([MediaDatabase? db]) async {
-  db ??= MediaDatabase(NativeDatabase.memory());
-  final coordinator = ScanCoordinator(
-    db,
-    scanner: LibraryScanner(
-      db,
-      buildExtractor: _buildCanned,
-      extractInIsolates: false,
-      policy: ScanPolicy.lean,
-    ),
-  );
-  return MediaClient.direct(
-    db,
-    service: MediaService(db, coordinator: coordinator),
-  );
-}
+Future<MediaClient> _client([MediaDatabase? db]) => hostMediaService(
+  db ?? MediaDatabase(NativeDatabase.memory()),
+  policy: ScanPolicy.lean,
+  buildExtractor: _buildCanned,
+);
 
 void main() {
   late Directory root;
@@ -64,8 +60,10 @@ void main() {
     return file.path;
   }
 
+  // Waits for a scan on a background isolate. The deadline only catches a
+  // hang: a host building several jobs at once is slow, not broken.
   Future<void> until(bool Function() ready) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    final deadline = DateTime.now().add(const Duration(seconds: 120));
     while (!ready()) {
       if (DateTime.now().isAfter(deadline)) fail('never came true');
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -249,6 +247,50 @@ void main() {
       expect(library.tracks.value.single.title, 'a');
     });
 
+    test('a card\'s tracks leave the shelf with the card and return with '
+        'it, without a scan', () async {
+      write('home/Music/h.mp3');
+      write('card/Music/c.mp3');
+      final home = p.join(root.path, 'home');
+      final card = p.join(root.path, 'card');
+      final inSlot = StorageReading(
+        present: true,
+        label: 'SD card',
+        path: card,
+      );
+      final storage = ValueNotifier(inSlot);
+      final library = MediaLibrary.over(
+        _client(),
+        roots: () => [
+          p.join(home, 'Music'),
+          if (storage.value.present) p.join(card, 'Music'),
+        ],
+        locations: () => [home, if (storage.value.present) card],
+        storage: storage,
+        cardSettle: const Duration(milliseconds: 50),
+      );
+      addTearDown(library.dispose);
+      await until(() => library.status.value.ready);
+      await library.scan();
+      expect(
+        library.tracks.value.map((t) => t.title),
+        unorderedEquals(['h', 'c']),
+      );
+      final scans = library.status.value.scan;
+
+      storage.value = StorageReading.empty;
+      await until(() => library.tracks.value.length == 1);
+      expect(library.tracks.value.single.title, 'h');
+      expect(library.status.value.scan, same(scans), reason: 'no scan to hide');
+
+      storage.value = inSlot;
+      await until(() => library.tracks.value.length == 2);
+      expect(
+        library.tracks.value.map((t) => t.title),
+        unorderedEquals(['h', 'c']),
+      );
+    });
+
     test('an empty library scans by itself after the wait; one with '
         'tracks looks the card over after its own, quietly', () async {
       write('card/Music/a.mp3');
@@ -263,17 +305,32 @@ void main() {
       first.status.dispose();
       first.tracks.dispose();
 
+      // A library that already has tracks waits for the recheck, not the
+      // first-scan delay. Proving that by the clock would mean sampling a
+      // window the machine can overshoot, so prove it by construction: with
+      // no recheck configured, this library never scans at all.
+      final quiet = MediaLibrary.over(
+        _client(db),
+        roots: () => [p.join(root.path, 'card', 'Music')],
+        autoScan: const Duration(milliseconds: 50),
+      );
+      addTearDown(quiet.dispose);
+      await until(() => quiet.status.value.ready);
+      expect(quiet.tracks.value, hasLength(1), reason: 'the shelf is kept');
+      expect(
+        quiet.status.value.scan,
+        isNull,
+        reason: 'the first-scan wait is not for a library with tracks',
+      );
+
       final second = MediaLibrary.over(
         _client(db),
         roots: () => [p.join(root.path, 'card', 'Music')],
         autoScan: const Duration(milliseconds: 50),
-        recheck: const Duration(milliseconds: 150),
+        recheck: const Duration(milliseconds: 50),
       );
       addTearDown(second.dispose);
       await until(() => second.status.value.ready);
-      expect(second.tracks.value, hasLength(1), reason: 'the shelf is kept');
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(second.status.value.scan, isNull, reason: 'not the first wait');
       await until(() => second.status.value.scan?.state == ScanState.done);
       final scan = second.status.value.scan!;
       expect(scan.changed, 0, reason: 'nothing new: nothing to announce');

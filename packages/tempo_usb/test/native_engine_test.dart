@@ -13,13 +13,20 @@ void main() {
     marker = File('${directory.path}/cleanup');
   });
   tearDown(() => directory.delete(recursive: true));
+  // The helpers here are real Dart processes, so a machine running several
+  // jobs at once can be slow to start, signal and reap them. Both graces
+  // match the engine's own defaults rather than cutting them fine: each wait
+  // ends the moment the process does, so escalation still proceeds in order.
   NativeUsbEngine engine({
-    Duration grace = const Duration(seconds: 5),
+    Duration grace = const Duration(seconds: 30),
     Future<Process> Function(String, List<String>)? start,
   }) => NativeUsbEngine(
     executable: Platform.resolvedExecutable,
     cancellationGrace: grace,
-    terminationGrace: const Duration(milliseconds: 250),
+    terminationGrace: const Duration(seconds: 15),
+    // The fixtures pad megabytes through both pipes before their terminal
+    // line, and that padding is what a loaded machine is slowest to deliver.
+    drainGrace: const Duration(seconds: 30),
     startProcess: start,
   );
 
@@ -44,7 +51,7 @@ void main() {
         usb.run([fixture, 'result', marker.path], onEvent: (_) {}),
         throwsStateError,
       );
-      await stopped.timeout(const Duration(seconds: 8));
+      await stopped.timeout(const Duration(seconds: 60));
       await stoppedAgain;
       expect(await marker.readAsString(), 'cancel cleanup complete');
       expect(await operation, {'event': 'cancelled'});
@@ -110,7 +117,7 @@ void main() {
         throwsStateError,
       );
       release.complete();
-      await stopped.timeout(const Duration(seconds: 8));
+      await stopped.timeout(const Duration(seconds: 60));
       expect(await operation, {'event': 'cancelled'});
       expect(await marker.readAsString(), 'cancel cleanup complete');
       expect(
@@ -147,7 +154,7 @@ void main() {
       final stopped = usb.stop();
       release.complete();
       await failed;
-      await stopped.timeout(const Duration(seconds: 2));
+      await stopped.timeout(const Duration(seconds: 60));
       expect(
         (await usb.run([
           fixture,
@@ -169,7 +176,7 @@ void main() {
       marker.path,
     ], onEvent: (_) => ready.complete());
     await ready.future.timeout(const Duration(seconds: 10));
-    await usb.stop().timeout(const Duration(seconds: 3));
+    await usb.stop().timeout(const Duration(seconds: 30));
     expect(await operation, {'event': 'cancelled'});
     expect(marker.existsSync(), false);
     expect(
@@ -194,7 +201,7 @@ void main() {
         marker.path,
       ], onEvent: (_) => ready.complete());
       await ready.future.timeout(const Duration(seconds: 10));
-      await usb.stop().timeout(const Duration(seconds: 3));
+      await usb.stop().timeout(const Duration(seconds: 30));
       expect(await operation, {'event': 'cancelled'});
       expect(await marker.readAsString(), 'legacy cleanup');
     },

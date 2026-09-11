@@ -56,7 +56,13 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(mutations, isEmpty);
       final manual = first.scan();
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final deadline = DateTime.now().add(const Duration(seconds: 60));
+      while (!running) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('the scan never reached the daemon');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
       expect(running, true);
       await first.dispose();
       await manual;

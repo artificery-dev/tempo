@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'services/tempod.dart';
 
 import 'package:tomeui/tomeui.dart';
 import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
@@ -25,20 +25,22 @@ enum PowerCommand { restart, shutDown }
 /// by accident - and the hold that opened the card is the way out of it,
 /// which is the same hold either way.
 class PowerDialog extends StatefulWidget {
-  const PowerDialog({super.key});
+  const PowerDialog({this.initialCommand = PowerCommand.restart, super.key});
 
-  /// How a command reaches the machine: systemctl on the player. A test
+  final PowerCommand initialCommand;
+
+  /// How a command reaches the machine: the privileged tempod socket. A test
   /// swaps in a listener, so that pressing Power Off in a test does not
   /// power off the machine the test is on.
-  static Future<void> Function(PowerCommand command) perform = _systemctl;
+  static Future<void> Function(PowerCommand command) perform = _requestPower;
 
-  static Future<void> _systemctl(PowerCommand command) async {
-    await Process.run('systemctl', [
-      switch (command) {
+  static Future<void> _requestPower(PowerCommand command) async {
+    await Tempod().request({
+      'op': switch (command) {
         PowerCommand.restart => 'reboot',
         PowerCommand.shutDown => 'poweroff',
       },
-    ]);
+    });
   }
 
   /// The dialog's route, for the menu leaf and for [show].
@@ -46,12 +48,14 @@ class PowerDialog extends StatefulWidget {
   /// Dressed at the classic scale whatever the rest of the UI is drawn at:
   /// a card of this shape fits the panel at that scale and no other - the
   /// large one's margins alone take half the width.
-  static Route<void> route() => DialogRoute<void>(
+  static Route<void> route({
+    PowerCommand initialCommand = PowerCommand.restart,
+  }) => DialogRoute<void>(
     theme: UiScale.regular.theme(Appearance.brightness.value),
     // No scrim tap on the player, and on the emulator the X is the way.
     barrierDismissible: false,
     settings: const RouteSettings(name: 'power'),
-    builder: (_) => const PowerDialog(),
+    builder: (_) => PowerDialog(initialCommand: initialCommand),
   );
 
   /// Put the dialog over [navigator], unless one is already up, however it
@@ -104,6 +108,7 @@ class _PowerDialogState extends State<PowerDialog> {
   void initState() {
     super.initState();
     _open = this;
+    _command = widget.initialCommand;
   }
 
   @override
@@ -112,11 +117,30 @@ class _PowerDialogState extends State<PowerDialog> {
     super.dispose();
   }
 
-  void _closeDialog() => Navigator.of(context).pop();
+  bool _busy = false;
+  String? _error;
 
-  void _perform(PowerCommand command) {
-    Navigator.of(context).pop();
-    PowerDialog.perform(command);
+  void _closeDialog() {
+    if (!_busy) Navigator.of(context).pop();
+  }
+
+  Future<void> _perform(PowerCommand command) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await PowerDialog.perform(command);
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = '$error';
+        });
+      }
+    }
   }
 
   @override
@@ -148,6 +172,7 @@ class _PowerDialogState extends State<PowerDialog> {
       },
       releaseOn: const {},
       onCapture: (intent) {
+        if (_busy) return;
         switch (intent) {
           case JogIntent():
             _rail.jog(intent);
@@ -166,17 +191,30 @@ class _PowerDialogState extends State<PowerDialog> {
       },
       child: Dialog(
         title: const Text('Power'),
-        content: WheelRail<PowerCommand>(
-          controller: _rail,
-          value: _command,
-          onChanged: (command) => setState(() => _command = command),
-          physics: _physics.copyWith(give: margin),
-          variant: SurfaceVariant.subtle,
-          segments: const [
-            SegmentOption(value: PowerCommand.restart, label: Text('Restart')),
-            SegmentOption(
-              value: PowerCommand.shutDown,
-              label: Text('Power Off'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_busy) const Text('Requesting power action…'),
+            if (_error != null)
+              Text('Could not complete power action: $_error'),
+            WheelRail<PowerCommand>(
+              controller: _rail,
+              value: _command,
+              onChanged: (command) {
+                if (!_busy) setState(() => _command = command);
+              },
+              physics: _physics.copyWith(give: margin),
+              variant: SurfaceVariant.subtle,
+              segments: const [
+                SegmentOption(
+                  value: PowerCommand.restart,
+                  label: Text('Restart'),
+                ),
+                SegmentOption(
+                  value: PowerCommand.shutDown,
+                  label: Text('Power Off'),
+                ),
+              ],
             ),
           ],
         ),

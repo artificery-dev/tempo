@@ -1,4 +1,5 @@
 import '../../services/storage_host.dart';
+import '../../services/card_host.dart';
 import 'package:tempo_data/tempo_data.dart';
 import '../../services/radio_host.dart';
 import 'package:daemon_client/daemon_client.dart';
@@ -10,7 +11,6 @@ import 'package:player_api/player_api.dart';
 import 'package:relic/relic.dart';
 
 import '../../services/device_monitor.dart';
-import '../../services/media_host.dart';
 import '../../services/settings_host.dart';
 import '../../services/remote_player.dart';
 import 'owner_connection.dart';
@@ -28,10 +28,10 @@ final class PlayerServer {
     this.onError,
     String? ownerToken,
     this.deviceMonitor,
-    this.mediaHost,
     this.settingsHost,
     this.radios,
     this.storageHost,
+    this.cardHost,
   }) : _ownerToken = ownerToken == null ? null : utf8.encode(ownerToken),
        _token = utf8.encode(token),
        _allowedOrigins = Set.unmodifiable(allowedOrigins) {
@@ -61,12 +61,12 @@ final class PlayerServer {
       )
       ..get('/api/v1/player', (_) => _json(200, player.snapshot.toJson()))
       ..post('/api/v1/commands', _command)
-      ..post('/api/v1/media', _media)
       ..get('/api/v1/settings', _settingsRead)
       ..put('/api/v1/settings', _settingsWrite)
       ..post('/api/v1/radios', _radioCommand)
       ..get('/api/v1/storage', _storageRead)
       ..post('/api/v1/storage', _storageSelect)
+      ..post('/api/v1/storage/card', _cardCommand)
       ..get('/api/v1/events', _upgrade)
       ..fallback = (_) => _error(404, 'not_found', 'Unknown API route.');
   }
@@ -74,10 +74,10 @@ final class PlayerServer {
   static const maxBodyBytes = 64 * 1024;
   final PlayerService player;
   final DeviceMonitor? deviceMonitor;
-  final MediaHost? mediaHost;
   final SettingsHost? settingsHost;
   final RadioHost? radios;
   final StorageHost? storageHost;
+  final CardHost? cardHost;
   final List<int>? _ownerToken;
   OwnerConnection? _owner;
   final List<int> _token;
@@ -138,18 +138,6 @@ final class PlayerServer {
       return _error(403, 'origin_denied', 'Browser origin is not allowed.');
     }
     try {
-      if (storageHost != null &&
-          !storageHost!.status.available &&
-          const [
-            '/api/v1/settings',
-            '/api/v1/media',
-          ].contains(request.url.path)) {
-        return _error(
-          503,
-          'profile_unavailable',
-          'The selected profile is unavailable.',
-        );
-      }
       return await _router.asHandler(request);
     } on HttpFailure catch (error) {
       return _error(error.status, error.code, error.message);
@@ -169,6 +157,38 @@ final class PlayerServer {
       ? _error(503, 'storage_unavailable', 'Profile selection is disabled.')
       : _json(200, storageHost!.status.toJson());
 
+  Future<Response> _cardCommand(Request request) async {
+    final host = cardHost;
+    if (host == null) {
+      return _error(
+        503,
+        'card_unavailable',
+        'Card maintenance is unavailable.',
+      );
+    }
+    final type = request.headers['content-type'];
+    if (type == null ||
+        type.length != 1 ||
+        type.single.split(';').first.trim().toLowerCase() !=
+            'application/json') {
+      return _error(415, 'unsupported_media_type', 'Use application/json.');
+    }
+    try {
+      return _json(
+        200,
+        await host.execute(jsonDecode(await _readBody(request))),
+      );
+    } on FormatException {
+      return _error(
+        400,
+        'invalid_request',
+        'Invalid card maintenance request.',
+      );
+    } on StateError catch (error) {
+      return _error(409, 'card_busy', error.message.toString());
+    }
+  }
+
   Future<Response> _storageSelect(Request request) async {
     final storage = storageHost;
     if (storage == null) {
@@ -187,6 +207,9 @@ final class PlayerServer {
     }
     try {
       final body = jsonDecode(await _readBody(request));
+      if (body is Map && body.length == 1 && body['retry'] == true) {
+        return _json(202, storage.retryPending().toJson());
+      }
       if (body is Map && body.length == 1 && body['dismissOffer'] == true) {
         return _json(200, storage.dismissOffer().toJson());
       }
@@ -245,40 +268,6 @@ final class PlayerServer {
       );
     }
     return _json(200, {'saved': true});
-  }
-
-  Future<Response> _media(Request request) async {
-    if (mediaHost == null) {
-      return _error(503, 'media_unavailable', 'Media service is disabled.');
-    }
-    final type = request.headers['content-type'];
-    if (type == null ||
-        type.length != 1 ||
-        type.single.split(';').first.trim().toLowerCase() !=
-            'application/json') {
-      throw const HttpFailure(
-        415,
-        'unsupported_media_type',
-        'Use application/json.',
-      );
-    }
-    final Map<String, Object?> envelope;
-    try {
-      final decoded = jsonDecode(await _readBody(request));
-      if (decoded is! Map<String, Object?> ||
-          decoded['id'] is! int ||
-          !['get', 'post', 'put', 'delete'].contains(decoded['method']) ||
-          decoded['path'] is! String ||
-          !(decoded['path'] as String).startsWith('/') ||
-          (decoded['body'] != null &&
-              decoded['body'] is! Map<String, Object?>)) {
-        throw const FormatException('Invalid media request');
-      }
-      envelope = decoded;
-    } on FormatException {
-      throw const HttpFailure(400, 'invalid_request', 'Invalid media request.');
-    }
-    return _json(200, await mediaHost!.handle(envelope));
   }
 
   Future<Response> _radioCommand(Request request) async {

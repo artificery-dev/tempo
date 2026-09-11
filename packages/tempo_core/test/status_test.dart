@@ -85,6 +85,23 @@ void main() {
               .painter
           as BatteryGaugePainter;
 
+  testWidgets(
+    'card activity is shown for busy and unknown, hidden only when idle',
+    (tester) async {
+      final services = talkingRadios();
+      final storage = services.storage as ValueNotifier<StorageReading>;
+      storage.value = const StorageReading(present: true, busy: true);
+      await pumpBar(tester, services: services, panel: true);
+      expect(find.byIcon(LucideIcons.hardDriveDownload), findsOneWidget);
+      storage.value = const StorageReading(present: true, busy: null);
+      await tester.pump();
+      expect(find.byIcon(LucideIcons.hardDriveDownload), findsOneWidget);
+      storage.value = const StorageReading(present: true, busy: false);
+      await tester.pump();
+      expect(find.byIcon(LucideIcons.hardDriveDownload), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets('the bar has no clock; the battery is the gauge, a glyph '
       'tall, in the bar\'s text color, with the percent in its field', (
     tester,

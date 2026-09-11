@@ -33,6 +33,9 @@ class NativeUsbEngine {
     agent ??= await _first([
       ?Platform.environment['TEMPO_USB_AGENT'],
       if (executable != null) '${File(executable!).parent.path}/DA.img',
+      // A macOS bundle keeps data out of Contents/MacOS, beside it instead.
+      if (executable != null)
+        '${File(executable!).parent.parent.path}/Resources/DA.img',
       '${Directory.current.path}/platform/firmware/DA.img',
     ]);
     return {

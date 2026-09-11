@@ -2,11 +2,15 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:daemon_client/daemon_client.dart';
+import 'package:cadence_client/cadence_client.dart'
+    show CadenceClient, VolumeStatus;
+import 'package:cadence_client/unix.dart';
 import 'package:tomeui/tomeui.dart';
 import 'package:tempo_core/tempo_core.dart';
 
 import 'daemon_device_readings.dart';
 import 'daemon_data_storage.dart';
+import 'daemon_card_maintenance.dart';
 import 'flutter_player_service.dart';
 
 /// Composes the device UI with daemon observations and the existing player.
@@ -23,6 +27,22 @@ final class _DaemonAppState extends State<DaemonApp> {
   DaemonDeviceReadings? _devices;
   FlutterPlayerService? _player;
   PlaybackOwnerConnection? _owner;
+  CadenceLibrary? _cadence;
+  DaemonCardMaintenance? _cardMaintenance;
+  StreamSubscription<VolumeStatus?>? _libraryAttachment;
+  final List<Listenable> _activitySources = [];
+
+  void _refreshCardActivity() {
+    final services = _services;
+    final phase = _cardMaintenance?.value.phase;
+    _devices?.setMediaBusy(
+      (_cadence?.cadenceBusy ?? true) ||
+          (services?.playback.value.hasTrack ?? false) ||
+          VideoPlayback.active != null ||
+          (_cardMaintenance?.value.busy ?? false) ||
+          phase == CardMaintenancePhase.failed,
+    );
+  }
 
   @override
   void initState() {
@@ -50,26 +70,81 @@ final class _DaemonAppState extends State<DaemonApp> {
       final places = Places(
         fileSystem: original.fileSystem,
         home: profile.mediaHome,
-        data: profile.dataPath!,
+        data: original.data,
         config: profile.configPath!,
         sdCard: original.sdCard,
       );
       _devices = DaemonDeviceReadings(
-        DeviceClient(baseUri: base, token: apiToken),
+        DeviceClient(
+          baseUri: base,
+          token: apiToken,
+          period: const Duration(seconds: 1),
+        ),
       );
       final settings = SettingsClient(baseUri: base, token: apiToken);
-      final media = MediaTransport(baseUri: base, token: apiToken);
-      final services = PlayerServices.device(
+      final cadence = CadenceLibrary(
+        CadenceClient(
+          UnixMediaTransport(
+            Platform.environment['CADENCE_SOCKET'] ??
+                '/run/cadenced/media.sock',
+          ),
+        ),
+      );
+      _cadence = cadence;
+      try {
+        await cadence.connect();
+      } catch (error) {
+        // Collection status and polling handle unavailable media. Settings and
+        // wallpaper still come from internal XDG storage and must open normally.
+        debugPrint('Cadence is not available yet: $error');
+      }
+      if (!mounted) return;
+      final media = CadenceMediaLibrary(cadence);
+      late final PlayerServices services;
+      final maintenance = DaemonCardMaintenance(
+        client: storageClient,
+        cadence: cadence,
+        device: _devices!.client,
+        stopPlayback: () async {
+          await services.playback.stop();
+          await VideoPlayback.active?.stop();
+        },
+      );
+      _cardMaintenance = maintenance;
+      services = PlayerServices.device(
         initialPlaces: places,
         dataStorage: controller,
+        cardMaintenance: maintenance,
         readSettings: settings.read,
         writeSettings: settings.write,
-        mediaTransport: media.send,
-        closeMediaTransport: media.close,
+        library: media,
+        resolveLibraryPath: media.resolvePath,
         battery: _devices!.battery,
         storage: _devices!.storage,
       );
       _services = services;
+      _activitySources.addAll([
+        services.playback,
+        VideoPlayback.session,
+        maintenance,
+      ]);
+      for (final source in _activitySources) {
+        source.addListener(_refreshCardActivity);
+      }
+      _refreshCardActivity();
+      String? attachmentIdentity;
+      _libraryAttachment = cadence.changes.listen((volume) {
+        final identity = volume == null
+            ? null
+            : '${volume.id}/${volume.generation}';
+        if (volume?.state != 'attached' ||
+            (attachmentIdentity != null && identity != attachmentIdentity)) {
+          unawaited(services.playback.stop());
+          unawaited(VideoPlayback.active?.stop());
+        }
+        attachmentIdentity = identity;
+        _refreshCardActivity();
+      });
       _player = FlutterPlayerService(
         playback: services.playback,
         volume: services.volume,
@@ -126,10 +201,19 @@ final class _DaemonAppState extends State<DaemonApp> {
   }
 
   Future<void> _close() async {
+    for (final source in _activitySources) {
+      source.removeListener(_refreshCardActivity);
+    }
+    _activitySources.clear();
+    _cardMaintenance?.dispose();
+    await _libraryAttachment?.cancel();
     await _owner?.close();
     await _player?.close();
     final services = _services;
     if (services == null) {
+      await _cadence?.close();
+      await _cadence?.client.close();
+      await _devices?.close();
       _dataStorage?.dispose();
       return;
     }
@@ -144,6 +228,8 @@ final class _DaemonAppState extends State<DaemonApp> {
     if (output case ChangeNotifier notifier) notifier.dispose();
     final fm = services.fmRadio;
     if (fm case ChangeNotifier notifier) notifier.dispose();
+    await _cadence?.close();
+    await _cadence?.client.close();
     await _devices?.close();
     _dataStorage?.dispose();
   }

@@ -372,7 +372,7 @@ class LibraryUpdateScreen extends StatelessWidget {
     if (scan == null) return 'never updated';
     return switch (scan.state) {
       ScanState.idle => 'never updated',
-      ScanState.walking => 'looking for files...',
+      ScanState.walking || ScanState.discovering => 'looking for files...',
       ScanState.extracting || ScanState.finishing =>
         scan.changed == 0
             ? 'nothing new, looking over ${scan.seen} files'

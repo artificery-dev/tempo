@@ -9,7 +9,7 @@ import 'package:tomeui/tomeui.dart';
 import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
 
 class PanelStorage extends ValueNotifier<DataStorageStatus>
-    implements DataStorageController {
+    implements DataStorageController, RetryableDataStorage {
   PanelStorage(super.value, {this.fail = false});
   final bool fail;
   @override
@@ -25,6 +25,8 @@ class PanelStorage extends ValueNotifier<DataStorageStatus>
     }
   }
 
+  @override
+  Future<void> retryPending() async {}
   @override
   Future<void> adoptCardForStartup() async {}
   @override
@@ -65,7 +67,8 @@ void main() {
           bodySmall: base.bodySmall.copyWith(fontFamily: 'PanelRoboto'),
         ),
       );
-  for (final pixels in [Panel.pixels, const Size(240, 320)]) {
+  // 480x360 is the smallest screen Tempo supports.
+  for (final pixels in [Panel.pixels]) {
     for (final scenario in [
       'startup',
       'picker',
@@ -87,6 +90,7 @@ void main() {
               cardProfileExists: scenario != 'error',
               available: scenario != 'recovery',
               usingCard: scenario == 'recovery',
+              restarting: scenario == 'recovery',
               deviceProfileExists: true,
               error: scenario == 'recovery'
                   ? 'The selected SD card is unavailable. Insert the original card or choose a saved device profile. Previous profile data has been preserved.'
@@ -94,10 +98,7 @@ void main() {
             ),
             fail: scenario == 'error',
           );
-          final choices = DataStorageChoices(
-            controller: storage,
-            startup: scenario == 'startup',
-          );
+          final choices = DataStorageChoices(controller: storage);
           await tester.pumpWidget(
             RepaintBoundary(
               key: boundary,
@@ -127,6 +128,12 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
+          if (scenario == 'collision') {
+            // External is the second option; choosing it over a card that
+            // already holds a library raises the collision choice.
+            wheel.jog(1);
+            await tester.pumpAndSettle();
+          }
           if (scenario == 'collision' || scenario == 'error') {
             wheel.press(WheelButton.select);
             await tester.pumpAndSettle();
@@ -154,7 +161,7 @@ void main() {
           await capture('initial');
           if (scenario == 'collision') {
             final warning = tester.getRect(
-              find.text('Moving replaces the saved data.'),
+              find.text('Use existing keeps that profile.'),
             );
             expect(
               warning.bottom,
@@ -163,16 +170,18 @@ void main() {
           }
 
           expect(tester.takeException(), isNull);
-          for (var i = 0; i < 3; i++) {
+          final labels = switch (scenario) {
+            'collision' => ['Use existing', 'Move current data', 'Cancel'],
+            'startup' => ['Use card', 'Use device'],
+            'recovery' => ['Retry move'],
+            _ => ['Internal', 'External'],
+          };
+          for (var i = 0; i < labels.length; i++) {
             if (i > 0) {
               wheel.jog(1);
               await tester.pumpAndSettle();
             }
-            final label = scenario == 'collision'
-                ? ['Use existing', 'Move current data', 'Cancel'][i]
-                : scenario == 'startup'
-                ? ['Yes', 'No', 'Don’t Ask Again'][i]
-                : ['Yes', 'No', 'Ask'][i];
+            final label = labels[i];
             final text = find.text(label);
             expect(text, findsOneWidget);
             final bounds = tester.getRect(text);

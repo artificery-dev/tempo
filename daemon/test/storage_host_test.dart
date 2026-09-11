@@ -31,15 +31,57 @@ void main() {
     card = '${root.path}/sd';
     attached = true;
     checkpoint = null;
-    Directory('$home/.tempo').createSync(recursive: true);
+    Directory('$home/.cadence').createSync(recursive: true);
     Directory('$home/.config/tempo').createSync(recursive: true);
     Directory(card).createSync();
-    File('$home/.tempo/library.db').writeAsStringSync('old database');
+    await manager().setPolicy(TempoStoragePolicy.ask);
+    File('$home/.cadence/library.db').writeAsStringSync('old database');
     File(
       '$home/.config/tempo/settings.json',
     ).writeAsStringSync('{"volume":42}');
   });
   tearDown(() => root.delete(recursive: true));
+
+  test(
+    'card removal keeps internal settings available and does not restart owners',
+    () async {
+      Directory('$card/.cadence').createSync();
+      await manager().acceptExistingSd();
+      var restarts = 0;
+      final host = StorageHost(
+        manager: manager,
+        mediaHome: home,
+        restartDelay: Duration.zero,
+        restart: () async {
+          restarts++;
+        },
+      );
+      Future<void> restarted(int count) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 60));
+        while (restarts < count) {
+          if (DateTime.now().isAfter(deadline)) {
+            fail('only $restarts of $count restarts arrived');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+      }
+
+      await host.initialize();
+      host.observeCard('card-a');
+      attached = false;
+      host.observeCard(null);
+      expect(restarts, 0);
+      expect(host.status.available, isTrue);
+      expect(host.status.configPath, '$home/.config/tempo');
+      expect(host.status.location, 'sd');
+      attached = true;
+      host.observeCard('card-a');
+      await restarted(1);
+      // A card that goes away takes no owner with it; only its return does.
+      expect(restarts, 1);
+      await host.close();
+    },
+  );
 
   test(
     'device Ask and No updates leave owners and restart queue untouched',
@@ -58,14 +100,13 @@ void main() {
         final result = await host.select(StorageSelection(policy: policy));
         expect(result.policy, policy);
         expect(result.restartPending, isFalse);
-        expect(result.dataPath, '$home/.tempo');
+        expect(result.dataPath, '$home/.cadence');
         expect(manager().readSelector().name, policy);
         expect(manager().readPendingRequest(), isNull);
       }
-      await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(restarts, 0);
       expect(
-        File('$home/.tempo/library.db').readAsStringSync(),
+        File('$home/.cadence/library.db').readAsStringSync(),
         'old database',
       );
       await host.close();
@@ -109,11 +150,11 @@ void main() {
         );
         expect(accepted.restartPending, isTrue);
         expect(accepted.location, 'device');
-        expect(accepted.dataPath, '$home/.tempo');
-        expect(Directory('$card/.tempo').existsSync(), isFalse);
-        await queued.future.timeout(const Duration(seconds: 1));
+        expect(accepted.dataPath, '$home/.cadence');
+        expect(Directory('$card/.cadence').existsSync(), isFalse);
+        await queued.future.timeout(const Duration(seconds: 60));
         File(
-          '$home/.tempo/library.db',
+          '$home/.cadence/library.db',
         ).writeAsStringSync('checkpoint after response');
       } finally {
         await server.close();
@@ -128,13 +169,13 @@ void main() {
       await next.initialize();
       expect(next.status.location, 'sd');
       expect(next.status.mediaHome, home);
-      expect(next.status.configPath, '$card/.tempo/config');
+      expect(next.status.configPath, '$home/.config/tempo');
       expect(
-        File('$card/.tempo/library.db').readAsStringSync(),
+        File('$card/.cadence/library.db').readAsStringSync(),
         'checkpoint after response',
       );
       expect(
-        File('$home/.tempo/library.db').readAsStringSync(),
+        File('$home/.cadence/library.db').readAsStringSync(),
         'checkpoint after response',
       );
       expect(manager().readPendingRequest(), isNull);
@@ -145,8 +186,8 @@ void main() {
   test(
     'offer decline keeps ask; adoption preserves existing card bytes',
     () async {
-      Directory('$card/.tempo/config').createSync(recursive: true);
-      File('$card/.tempo/library.db').writeAsStringSync('card database');
+      Directory('$card/.cadence/config').createSync(recursive: true);
+      File('$card/.cadence/library.db').writeAsStringSync('card database');
       final host = StorageHost(
         manager: manager,
         mediaHome: home,
@@ -173,11 +214,11 @@ void main() {
       expect(next.status.available, isTrue);
       expect(next.status.location, 'sd');
       expect(
-        File('$card/.tempo/library.db').readAsStringSync(),
+        File('$card/.cadence/library.db').readAsStringSync(),
         'card database',
       );
       expect(
-        File('$home/.tempo/library.db').readAsStringSync(),
+        File('$home/.cadence/library.db').readAsStringSync(),
         'old database',
       );
       await next.close();
@@ -201,20 +242,20 @@ void main() {
       );
       await host.initialize();
       await host.select(const StorageSelection(policy: 'yes'));
-      await failed.future.timeout(const Duration(seconds: 1));
+      await failed.future.timeout(const Duration(seconds: 60));
       expect(manager().readPendingRequest(), isNull);
       expect(host.status.location, 'device');
       expect(host.status.available, isTrue);
       expect(host.status.error, contains('Restart was not queued'));
-      expect(Directory('$card/.tempo').existsSync(), isFalse);
+      expect(Directory('$card/.cadence').existsSync(), isFalse);
       await host.close();
     },
   );
 
   test(
-    'selected missing card serves unavailable status without fallback owners',
+    'selected missing card retains internal settings and uses internal library fallback',
     () async {
-      Directory('$card/.tempo').createSync();
+      Directory('$card/.cadence').createSync();
       await manager().acceptExistingSd();
       attached = false;
       final host = StorageHost(
@@ -236,10 +277,10 @@ void main() {
           token: 'storage-test',
         );
         final state = await client.status();
-        expect(state.location, 'sd');
-        expect(state.available, isFalse);
-        expect(state.dataPath, isNull);
-        expect(state.configPath, isNull);
+        expect(state.location, 'device');
+        expect(state.available, isTrue);
+        expect(state.dataPath, '$home/.cadence');
+        expect(state.configPath, '$home/.config/tempo');
         expect(state.sdAvailable, isFalse);
         expect(
           File('$home/.config/tempo/settings.json').readAsStringSync(),
@@ -293,7 +334,7 @@ void main() {
       expect(next.status.available, isTrue);
       expect(next.status.policy, 'no');
       expect(
-        File('$home/.tempo/library.db').readAsStringSync(),
+        File('$home/.cadence/library.db').readAsStringSync(),
         'old database',
       );
       await next.close();
@@ -334,7 +375,7 @@ void main() {
       expect(next.status.available, isTrue);
       expect(next.status.location, 'device');
       expect(
-        File('$home/.tempo/library.db').readAsStringSync(),
+        File('$home/.cadence/library.db').readAsStringSync(),
         'old database',
       );
       await next.close();

@@ -14,7 +14,7 @@ class CollectionScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final library = PlayerServicesScope.of(context).library;
-    final shelf = library is MediaLibrary
+    final shelf = library is CollectionLibrary
         ? library.shelf(section)
         : NoLibrary.shared.tracks;
     return PanelScreen(
@@ -49,14 +49,14 @@ class CollectionScreen extends StatelessWidget {
                           autofocus: true,
                           onActivate: (index) {
                             final track = sorted[index];
-                            if (library is MediaLibrary &&
+                            if (library is CollectionLibrary &&
                                 library.isVideo(track)) {
                               playVideo(context, track);
                             } else {
                               final audio = sorted
                                   .where(
                                     (t) =>
-                                        library is! MediaLibrary ||
+                                        library is! CollectionLibrary ||
                                         !library.isVideo(t),
                                   )
                                   .toList();
@@ -68,7 +68,7 @@ class CollectionScreen extends StatelessWidget {
                               SettingTile(
                                 title: track.title,
                                 icon:
-                                    library is MediaLibrary &&
+                                    library is CollectionLibrary &&
                                         library.isVideo(track)
                                     ? LucideIcons.film
                                     : MenuIcons.of(section.icon),

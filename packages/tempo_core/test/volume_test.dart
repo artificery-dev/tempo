@@ -182,6 +182,22 @@ void main() {
     await settle(tester);
   });
 
+  testWidgets('the settings slider moves the level without the display', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    VolumeOsd.quietly(30);
+    await volume.setLevel(30);
+    await fade(tester);
+    expect(card(), findsNothing);
+    // Only that one level was spoken for: the next change shows as ever.
+    volume.value = const VolumeReading(level: 40);
+    await fade(tester);
+    expect(card(), findsOneWidget);
+    await tester.pump(VolumeOsd.linger);
+    await settle(tester);
+  });
+
   testWidgets('external volume changes leave a sleeping screen dark', (
     tester,
   ) async {

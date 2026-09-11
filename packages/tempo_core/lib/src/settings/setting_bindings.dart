@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show FileSystemException;
 
 import 'package:tomeui/tomeui.dart';
+import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
 
 import '../appearance.dart';
 import '../debug_menu.dart';
@@ -214,7 +215,7 @@ abstract final class PlayerSettings {
     SettingBindings.registerAll(sinks(services, settings: settings));
     SettingBindings.registerActions(actions(services, settings: settings));
     final bridge = SettingsBridge(settings: settings)..attach();
-    if (services.library case final MediaLibrary library) {
+    if (services.library case final CollectionLibrary library) {
       library.configureFolders(settings.value('/settings/library/roots'));
       library.scanOnStartup =
           settings.value('/settings/library/scan-on-boot') != false;
@@ -296,22 +297,22 @@ abstract final class PlayerSettings {
     Settings? settings,
   }) => {
     'library.scanOnBoot': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.scanOnStartup = change.to == true;
       }
     },
     'library.scanOnCard': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.scanOnCard = change.to == true;
       }
     },
     'library.recheck': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.recheck = '${change.to}';
       }
     },
     'library.roots': (change) {
-      if (services.library case final MediaLibrary library) {
+      if (services.library case final CollectionLibrary library) {
         library.configureFolders(change.to);
       }
     },
@@ -400,6 +401,10 @@ abstract final class PlayerSettings {
         .value
         .copyWith(acceleration: change.to == true),
     'wheel.sensitivity': (change) => WheelSettings.setFirmness('${change.to}'),
+    'wheel.letterEntry': (change) => WheelSettings.letterEntry.value =
+        WheelSettings.millis(change.to, WheelList.letterEntry),
+    'wheel.letterIdle': (change) => WheelSettings.letterIdle.value =
+        WheelSettings.millis(change.to, WheelList.accelerationIdle),
 
     'time.hour': (change) => ClockFormat.hour24.value = change.to != 12,
     'time.zone': (change) {
@@ -426,6 +431,8 @@ abstract final class PlayerSettings {
       // A change the mixer itself reported is already true; sending it
       // back would be a loop.
       if (level is num && change.source != SettingSource.system) {
+        // The slider is the display here; the notice would only repeat it.
+        VolumeOsd.quietly(level.round());
         unawaited(services.volume.setLevel(level.round()));
       }
     },

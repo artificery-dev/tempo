@@ -13,7 +13,7 @@ import 'tempod_error.dart';
 /// reply carries `ok`; a false one becomes a [TempodError] with the
 /// daemon's own words in it.
 class Tempod {
-  Tempod({String? socket})
+  Tempod({String? socket, this.requestTimeout = timeout})
     : socket = socket ?? Platform.environment['TEMPOD_SOCKET'] ?? defaultSocket;
 
   /// Where the daemon listens: `daemon.socket` in config.yaml, which the
@@ -22,6 +22,7 @@ class Tempod {
   static const defaultSocket = '/run/tempod/tempod.sock';
 
   final String socket;
+  final Duration requestTimeout;
 
   /// Long enough for the slowest op: the vendor FM seek timeout is fifteen
   /// seconds, and the reply comes only after the receiver finishes.
@@ -40,14 +41,14 @@ class Tempod {
     final connection = await Socket.connect(
       InternetAddress(socket, type: InternetAddressType.unix),
       0,
-    ).timeout(timeout);
+    ).timeout(requestTimeout);
     try {
       connection.add(utf8.encode('${jsonEncode(request)}\n'));
       await connection.flush();
       // The daemon closes after its line, so the stream's end is the reply's.
       final bytes = await connection
           .fold<List<int>>([], (all, chunk) => all..addAll(chunk))
-          .timeout(timeout);
+          .timeout(requestTimeout);
       final reply = jsonDecode(utf8.decode(bytes).trim());
       if (reply is! Map<String, Object?>) {
         throw TempodError('reply is not an object: $reply');

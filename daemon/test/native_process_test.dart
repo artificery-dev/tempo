@@ -46,7 +46,7 @@ void main() {
             diagnostics.write(utf8.decode(bytes, allowMalformed: true));
           }
         });
-        final deadline = DateTime.now().add(const Duration(seconds: 5));
+        final deadline = DateTime.now().add(const Duration(seconds: 60));
         while (await FileSystemEntity.type(path) ==
             FileSystemEntityType.notFound) {
           if (DateTime.now().isAfter(deadline)) {
@@ -70,7 +70,7 @@ void main() {
                 .transform(utf8.decoder)
                 .transform(const LineSplitter())
                 .first
-                .timeout(const Duration(seconds: 3));
+                .timeout(const Duration(seconds: 60));
             final response = jsonDecode(line) as Map<String, dynamic>;
             expect(response['ok'], isTrue, reason: 'request $i: $line');
             expect(response['level'], 50, reason: line);

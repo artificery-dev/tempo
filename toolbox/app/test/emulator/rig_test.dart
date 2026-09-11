@@ -9,7 +9,6 @@ import 'package:tomeui_clickwheel/tomeui_clickwheel.dart';
 import 'package:tempo_toolbox/emulator/emulator.dart';
 import 'package:tempo_toolbox/emulator/src/device_body.dart';
 import 'package:tempo_toolbox/emulator/src/emulator_window.dart';
-import 'package:tempo_toolbox/emulator/src/paths.dart';
 import 'package:tempo_toolbox/emulator/src/rig.dart';
 import 'package:tempo_toolbox/emulator/src/wheel_motion.dart';
 
@@ -116,22 +115,27 @@ void main() {
 
   testWidgets('the card comes and goes with the slot', (tester) async {
     await pumpDevice(tester);
-    // A card in the slot is where the rig starts; the bar no longer says
-    // so - the card is the browser's business, not the bar's.
+    // An empty slot is where the rig starts, and the card it will offer is
+    // a made-up one: nothing on this machine is touched until asked.
     expect(find.byIcon(LucideIcons.hardDrive), findsNothing);
-    // And it is the host folder the emulator keeps for the purpose: a card
-    // that is still there tomorrow, out of the box.
-    expect(rig.cardSource, CardSource.hostFolder);
-    expect(rig.storage.value.path, Paths.card.path);
-    expect(rig.storage.value.label, 'sdcard');
+    expect(rig.cardInserted, isFalse);
+    expect(rig.cardSource, CardSource.inMemory);
+    expect(rig.storage.value, StorageReading.empty);
 
-    rig.cardSource = CardSource.inMemory;
+    rig.cardInserted = true;
     await tester.pump();
     expect(rig.storage.value.label, 'Emulated card');
     expect(rig.storage.value.path, isNull, reason: 'in-memory has no root');
 
+    // Changing what stands behind the card while it is in the slot is an
+    // eject and an insert, in that order.
+    final readings = <StorageReading>[];
+    rig.storage.addListener(() => readings.add(rig.storage.value));
     rig.cardSource = CardSource.hostFolder;
+    expect(readings.map((r) => r.present), [false, true]);
+    readings.clear();
     rig.hostFolder = '/home/you/Music';
+    expect(readings.map((r) => r.present), [false, true]);
     await tester.pump();
     expect(rig.storage.value.path, '/home/you/Music');
     expect(rig.storage.value.label, 'Music');
@@ -139,6 +143,9 @@ void main() {
     rig.cardInserted = false;
     await tester.pump();
     expect(rig.storage.value, StorageReading.empty);
+    // Each change put a notice up; its clock must not outlive the test.
+    Osd.hide();
+    await tester.pump();
   });
 
   testWidgets('the rig opens over the device, with the card sources spelled '
@@ -209,6 +216,7 @@ void main() {
   test('the card is mounted into the machine where the device mounts it', () {
     // The made-up card: the one whose contents the test can speak for.
     rig.cardSource = CardSource.inMemory;
+    rig.cardInserted = true;
     final machine = rig.places.value;
     expect(machine.sdCard, '/mnt/sd');
     expect(machine.home, '/home/tempo');
@@ -249,6 +257,7 @@ void main() {
 
     rig.cardSource = CardSource.hostFolder;
     rig.hostFolder = temp.path;
+    rig.cardInserted = true;
 
     final fs = rig.places.value.fileSystem;
     // The folder's contents appear at the mount point, wearing the

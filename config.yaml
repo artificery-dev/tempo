@@ -5,6 +5,11 @@
 # keys in config.local.yaml, which is gitignored and deep-merged over this one.
 # See config.local.example.yaml, and run `just secrets hash` once you have.
 
+# Tempo's release version: the Toolbox, the daemon and the firmware ship
+# together under it. A `v<version>` tag on main must match it (CI refuses
+# otherwise); builds from any other commit carry `<version>~git<date>.<sha>`.
+version: 0.9.0
+
 device:
   # Hostname, and the name written into /etc/hosts.
   hostname: tempo
@@ -165,9 +170,6 @@ firewall:
   allow: []
 
 rootfs:
-  # Provisioned calibration capture for this Y2; validated and embedded by
-  # platform/bluetooth/tool/build.dart. Kept outside disposable build output.
-  bluetooth_bootstrap_fixture: platform/firmware/local/mt6582-modem-bootstrap
   suite: bookworm
   mirror: http://deb.debian.org/debian
   arch: armhf
@@ -201,6 +203,8 @@ rootfs:
     # Networking is systemd-networkd + systemd-resolved, both shipped with
     # systemd itself, so nothing is needed here for the gadget link.
     system:
+      - exfatprogs
+      - fdisk
       # resolved is not in the bootstrap set above: it depends on the virtual
       # default-dbus-system-bus, which debootstrap --include cannot resolve
       # (the second stage fails on it). apt can, and dbus is named outright
@@ -333,7 +337,8 @@ flutter:
     icudtl: /usr/share/flutter/icudtl.dat
     bundle: /opt/tempo/flutter_assets
   # Holding both volume keys at boot starts the debug (JIT) build with the
-  # Dart VM service on this port, bound to the gadget link.
+  # Dart VM service on this port, listening on every address with auth codes
+  # disabled; the firewall admits it only over the gadget link.
   vm_service_port: 41200
 
 firmware:
@@ -345,6 +350,15 @@ firmware:
   # any state instead of assuming a working bootloader is already there. Vendor
   # binaries, carried through Git LFS. Relative to the root.
   stock_rom: platform/firmware/stock
+
+cadence:
+  # The Cadence daemon ships as a release of its public repository; Tempo
+  # installs the armhf bundle tarball from this release. The tarball must
+  # match bundle_sha256 and the bundle's own manifest must verify. Move
+  # release and bundle_sha256 together when adopting a newer cadenced.
+  repository: https://git.artificery.dev/artificery/cadence
+  release: v0.9.0
+  bundle_sha256: c1369399e8b85cac8f646f8bd315bf48d9bdf44c7910369d1803d9f2714e465c
 
 daemon:
   # Independent host compiler; never changes the app/engine pairing.

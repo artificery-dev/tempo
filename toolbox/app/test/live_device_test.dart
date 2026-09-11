@@ -133,9 +133,18 @@ void main() {
     expect(find.byKey(const ValueKey('live-report')), findsOneWidget);
     expect(device.calls.any((c) => c.startsWith('systemctl show')), isTrue);
     await tester.tap(find.text('Save report'));
-    await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    });
+    // The page writes a real file as it rebuilds, so pump and give the write
+    // real time in turn until the report is actually on disk.
+    final saved = File(output);
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    while (!saved.existsSync() ||
+        !saved.readAsStringSync().contains('player-services')) {
+      if (DateTime.now().isAfter(deadline)) fail('the report was never saved');
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+    }
     await tester.pumpAndSettle();
     expect(File(output).readAsStringSync(), contains('player-services'));
   });
