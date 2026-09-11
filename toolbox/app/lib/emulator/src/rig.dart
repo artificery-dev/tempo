@@ -414,6 +414,20 @@ class Rig extends ChangeNotifier {
 
   bool _cardInserted = false;
 
+  /// Whether the player opens on its first-run setup, as it does on a
+  /// device until setup is done. Seeded from the launch (`--first-run` or
+  /// TEMPO_FIRST_RUN=1), switched from the rig panel, and cleared by the
+  /// setup finishing; nothing is written anywhere, since there is no
+  /// machine to set up here.
+  static bool launchFirstRun = false;
+  bool _firstRun = launchFirstRun;
+  bool get firstRun => _firstRun;
+  set firstRun(bool on) {
+    if (on == _firstRun) return;
+    _firstRun = on;
+    notifyListeners();
+  }
+
   bool get cardInserted => _cardInserted;
 
   /// Putting a card in or taking it out: each is an event the player

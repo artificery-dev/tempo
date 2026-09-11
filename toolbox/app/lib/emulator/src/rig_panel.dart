@@ -586,6 +586,17 @@ class _CardSection extends StatelessWidget {
       title: 'SD card',
       children: [
         _Control(
+          label: 'First run',
+          description: const CaptionText(
+            'Open the player on its first-run setup, as a fresh device does.',
+          ),
+          child: Switch(
+            value: rig.firstRun,
+            swatch: RigPanel.swatch,
+            onChanged: (on) => rig.firstRun = on,
+          ),
+        ),
+        _Control(
           label: 'Card in the slot',
           description: const CaptionText(
             'Insert or remove the simulated SD card.',

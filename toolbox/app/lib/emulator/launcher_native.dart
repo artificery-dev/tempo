@@ -128,6 +128,11 @@ Future<bool> startEmulatorEntrypoint(List<String> arguments) async {
       const bool.fromEnvironment('TEMPO_TOOLBOX_EMULATOR'))) {
     return false;
   }
+  // The same flag the device's launcher would set, so the setup can be
+  // driven here: `--first-run`, or the variable flutter-pi's launcher uses.
+  Rig.launchFirstRun =
+      arguments.contains('--first-run') ||
+      Platform.environment['TEMPO_FIRST_RUN'] == '1';
   // The editor's direct emulator target uses the same reusable content as
   // the secondary desktop window and the mobile navigation route.
   runApp(

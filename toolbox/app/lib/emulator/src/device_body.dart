@@ -21,6 +21,8 @@ class DeviceBody extends StatelessWidget {
     required this.motion,
     required this.services,
     this.profileSuspended = false,
+    this.firstRun = false,
+    this.onFirstRunDone,
     this.onDrag,
     this.zoom,
     super.key,
@@ -35,6 +37,11 @@ class DeviceBody extends StatelessWidget {
   /// Explicit emulator sources prevent accidental native device fallback.
   final PlayerServices services;
   final bool profileSuspended;
+
+  /// The player opens on its setup instead of its home, as on a device
+  /// whose first run is not done; [onFirstRunDone] is the setup finishing.
+  final bool firstRun;
+  final VoidCallback? onFirstRunDone;
   final VoidCallback? onDrag;
 
   ClickWheelController get wheel => motion.wheel;
@@ -146,6 +153,13 @@ class DeviceBody extends StatelessWidget {
                                           ? DataStorageRecoveryApp(
                                               controller: services.dataStorage!,
                                               wheel: wheel,
+                                            )
+                                          : firstRun
+                                          ? FirstRunApp(
+                                              key: ObjectKey(services),
+                                              wheel: wheel,
+                                              services: services,
+                                              onFinished: onFirstRunDone,
                                             )
                                           : TempoApp(
                                               key: ObjectKey(services),

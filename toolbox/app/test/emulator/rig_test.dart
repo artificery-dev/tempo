@@ -343,4 +343,20 @@ void main() {
     );
     expect(bodySizeAt(shell), const Typography().body.fontSize);
   });
+
+  test('first run is a switch the launch seeds and the setup clears', () {
+    Rig.launchFirstRun = true;
+    final fresh = Rig();
+    addTearDown(fresh.dispose);
+    expect(fresh.firstRun, isTrue);
+    var told = 0;
+    fresh.addListener(() => told++);
+    fresh.firstRun = false;
+    expect(fresh.firstRun, isFalse);
+    expect(told, 1);
+    fresh.firstRun = false;
+    expect(told, 1, reason: 'no change, no word');
+    Rig.launchFirstRun = false;
+    expect(Rig().firstRun, isFalse);
+  });
 }

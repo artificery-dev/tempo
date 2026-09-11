@@ -510,6 +510,8 @@ class _EmulatorShellState extends ConsumerState<EmulatorShell> {
                                   motion: _motion,
                                   services: _rig.services,
                                   profileSuspended: _rig.profileSuspended,
+                                  firstRun: _rig.firstRun,
+                                  onFirstRunDone: () => _rig.firstRun = false,
                                   onDrag: widget.onDrag,
                                 ),
                               ),
