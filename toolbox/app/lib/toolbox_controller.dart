@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:tempo_usb/tempo_usb.dart' show DeviceSetup;
 import 'engine.dart';
 
 final toolboxControllerProvider = ChangeNotifierProvider<ToolboxController>(
@@ -77,6 +78,18 @@ class ToolboxController extends ChangeNotifier {
 
   bool allowPreloaderFlash = false;
   bool resumeWrites = false;
+
+  /// First-run choices for a flash; whatever is blank the player asks for.
+  DeviceSetup deviceSetup = const DeviceSetup();
+  bool deviceSetupOpen = false;
+  void setDeviceSetup(DeviceSetup value) {
+    if (!busy) _update(() => deviceSetup = value);
+  }
+
+  /// Whether the task can carry first-run choices: they reach the player
+  /// through Tempo Recovery, so only a flash from the desktop Toolbox.
+  bool get deviceSetupAvailable =>
+      task == 'Flash' && !engine.isWeb && !useLegacyDownloadAgent;
   bool preloaderWriting = false;
   bool errorCopied = false;
   String status = 'Loading the USB engine…', phase = 'ready';
@@ -402,6 +415,19 @@ class ToolboxController extends ChangeNotifier {
         ((task == 'Flash' || task == 'Restore') && !firmwareReady)) {
       return;
     }
+    final setup = deviceSetupAvailable && !deviceSetup.isEmpty
+        ? deviceSetup
+        : null;
+    if (setup != null && setup.validate().isNotEmpty) {
+      final problem = setup.validate().entries.first;
+      event({
+        'event': 'error',
+        'message':
+            'Device setup, ${DeviceSetup.labels[problem.key]!.toLowerCase()}: ${problem.value}',
+      });
+      return;
+    }
+    engine.deviceSetup = setup;
     _update(() {
       busy = true;
       report = null;

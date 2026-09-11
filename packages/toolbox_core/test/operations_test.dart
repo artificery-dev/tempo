@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:tempo_usb/tempo_usb.dart';
 import 'package:toolbox_core/toolbox_core.dart';
@@ -7,12 +8,19 @@ class FakeEngine extends NativeUsbEngine {
   FakeEngine() : super(executable: 'fake', agent: 'DA.img');
   final calls = <List<String>>[];
   bool preloader = false;
+
+  /// The setup document as the engine would read it, while it exists.
+  String? setupDocument;
   @override
   Future<EngineEvent> run(
     List<String> arguments, {
     required void Function(EngineEvent) onEvent,
   }) async {
     calls.add(arguments);
+    final setup = arguments.indexOf('--setup');
+    if (setup >= 0) {
+      setupDocument = await File(arguments[setup + 1]).readAsString();
+    }
     return arguments.first == 'inspect-firmware'
         ? {'event': 'firmware-info', 'includes_preloader': preloader}
         : {'event': 'result'};
@@ -56,6 +64,104 @@ void main() {
       ]);
     },
   );
+  test(
+    'device setup rides along in a private file, for Recovery only',
+    () async {
+      const setup = DeviceSetup(
+        username: 'alice',
+        password: 'correct horse',
+        hostname: 'alices-y2',
+        sshKeys: 'ssh-ed25519 AAAA alice\n\n',
+      );
+      await operations.install(firmware.path, setup: setup, onEvent: (_) {});
+      final arguments = engine.calls.last;
+      expect(arguments.sublist(0, 3), [
+        'recovery',
+        'flash',
+        firmware.absolute.path,
+      ]);
+      expect(arguments[3], '--setup');
+      expect(jsonDecode(engine.setupDocument!), {
+        'username': 'alice',
+        'password': 'correct horse',
+        'hostname': 'alices-y2',
+        'ssh_keys': ['ssh-ed25519 AAAA alice'],
+      });
+      expect(
+        File(arguments[4]).existsSync(),
+        isFalse,
+        reason: 'gone after the run',
+      );
+      await operations.install(
+        firmware.path,
+        setup: const DeviceSetup(),
+        onEvent: (_) {},
+      );
+      expect(engine.calls.last, isNot(contains('--setup')));
+      await expectLater(
+        operations.install(
+          firmware.path,
+          setup: setup,
+          legacyDownloadAgent: true,
+          onEvent: (_) {},
+        ),
+        throwsStateError,
+      );
+      await expectLater(
+        operations.install(
+          firmware.path,
+          setup: const DeviceSetup(username: 'root'),
+          onEvent: (_) {},
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+  test('device setup checks what the player would refuse', () {
+    expect(const DeviceSetup().validate(), isEmpty);
+    expect(const DeviceSetup().isEmpty, isTrue);
+    const fine = DeviceSetup(
+      username: '_svc-1',
+      hostname: 'Y2-one',
+      timezone: 'America/Argentina/Buenos_Aires',
+      locale: 'ast_ES.UTF-8',
+      sshKeys: 'sk-ssh-ed25519@openssh.com AAAA',
+    );
+    expect(fine.validate(), isEmpty);
+    expect(fine.configured, [
+      'Account name',
+      'Device name',
+      'Time zone',
+      'Language',
+      'SSH keys',
+    ]);
+    final wrong = const DeviceSetup(
+      username: 'Alice',
+      hostname: '-y2',
+      timezone: 'Europe/../shadow',
+      locale: 'english',
+      sshKeys: 'rsa AAAA',
+    ).validate();
+    expect(wrong.keys, [
+      'username',
+      'hostname',
+      'timezone',
+      'locale',
+      'ssh_keys',
+    ]);
+    expect(
+      DeviceSetup.fromJson({
+        'hostname': 'y2',
+        'ssh_keys': ['ssh-ed25519 A', 'ssh-ed25519 B'],
+      }).keys,
+      ['ssh-ed25519 A', 'ssh-ed25519 B'],
+    );
+    expect(
+      () => DeviceSetup.fromJson({'colour': 'red'}),
+      throwsFormatException,
+    );
+    expect(() => DeviceSetup.fromJson({'username': 7}), throwsFormatException);
+  });
   for (final legacy in [false, true]) {
     test('transfer routing, legacy=$legacy', () async {
       final configured = ToolboxOperations(

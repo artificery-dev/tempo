@@ -15,6 +15,9 @@ class UsbEngine {
   bool useLegacyDownloadAgent = false;
   bool verifyWrites = true;
   bool rebootAfterSuccess = true;
+
+  /// First-run choices to write into the flashed root filesystem, or null.
+  DeviceSetup? deviceSetup;
   var _operations = ToolboxOperations();
   String? get agent => _operations.agent;
   String? get preloader => _operations.preloader;
@@ -259,6 +262,7 @@ class UsbEngine {
               verifyWrite: verifyWrites,
               legacyDownloadAgent: useLegacyDownloadAgent,
               rebootAfterSuccess: rebootAfterSuccess,
+              setup: deviceSetup,
               onEvent: _onEvent,
             )
           : await _operations.probe(onEvent: _onEvent);

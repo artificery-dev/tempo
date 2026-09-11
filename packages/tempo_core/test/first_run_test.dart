@@ -145,6 +145,7 @@ void main() {
             'password': true,
             'hostname': 'alices-player',
             'timezone': 'Europe/Berlin',
+            'locale': 'de_DE.UTF-8',
           },
         },
         'clock' => {'ok': true, 'synchronized': true, 'ntp': true, 'now': ''},
@@ -163,11 +164,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     await choose(tester, 0); // welcome
-    await choose(tester, 0); // language
     expect(
       find.byKey(const ValueKey('first-run-mode')),
       findsOneWidget,
-      reason: 'zone, clock, name and account were settled already',
+      reason: 'language, zone, clock, name and account were settled already',
     );
     await choose(tester, 0);
     await choose(tester, 0);

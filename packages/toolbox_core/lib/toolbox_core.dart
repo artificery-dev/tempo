@@ -1,6 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:tempo_usb/tempo_usb.dart';
-export 'package:tempo_usb/tempo_usb.dart' show EngineEvent;
+export 'package:tempo_usb/tempo_usb.dart' show DeviceSetup, EngineEvent;
 
 /// Shared end-user operation policy used by the GUI and command line.
 class ToolboxOperations {
@@ -148,6 +149,10 @@ class ToolboxOperations {
     ], onEvent: onEvent);
   }
 
+  /// A [setup] rides along into the flashed root filesystem through Tempo
+  /// Recovery, checked here first; the engine hashes its password. It goes
+  /// to the engine in a file of its own, in a directory only this user can
+  /// read, and the file is gone once the engine returns.
   Future<EngineEvent> install(
     String path, {
     bool allowPreloader = false,
@@ -155,20 +160,44 @@ class ToolboxOperations {
     bool verifyWrite = true,
     bool legacyDownloadAgent = false,
     bool rebootAfterSuccess = true,
+    DeviceSetup? setup,
     required void Function(EngineEvent) onEvent,
   }) async {
+    if (setup != null && setup.isEmpty) setup = null;
+    if (setup != null) {
+      if (legacyDownloadAgent)
+        throw StateError('Device setup needs Tempo Recovery.');
+      final problems = setup.validate();
+      if (problems.isNotEmpty)
+        throw ArgumentError(
+          '${DeviceSetup.labels[problems.keys.first]}: ${problems.values.first}',
+        );
+    }
     final info = await inspectFirmware(path);
     if (info['event'] != 'firmware-info') return info;
-    return _run([
-      if (!legacyDownloadAgent) 'recovery',
-      'flash',
-      if (legacyDownloadAgent) _agent(),
-      File(path).absolute.path,
-      if (allowPreloader) '--allow-preloader',
-      if (resume) '--resume',
-      if (!verifyWrite) '--no-verify',
-      if (!rebootAfterSuccess) '--no-reboot',
-    ], onEvent: onEvent);
+    Directory? folder;
+    File? document;
+    if (setup != null) {
+      folder = await Directory.systemTemp.createTemp('tempo-device-setup-');
+      document = await File(
+        '${folder.path}${Platform.pathSeparator}device-setup.json',
+      ).writeAsString(jsonEncode(setup.toJson()), flush: true);
+    }
+    try {
+      return await _run([
+        if (!legacyDownloadAgent) 'recovery',
+        'flash',
+        if (legacyDownloadAgent) _agent(),
+        File(path).absolute.path,
+        if (allowPreloader) '--allow-preloader',
+        if (resume) '--resume',
+        if (!verifyWrite) '--no-verify',
+        if (!rebootAfterSuccess) '--no-reboot',
+        if (document != null) ...['--setup', document.path],
+      ], onEvent: onEvent);
+    } finally {
+      if (folder != null) await folder.delete(recursive: true);
+    }
   }
 
   /// Restore validates/stages the whole backup before opening USB. RPMB is

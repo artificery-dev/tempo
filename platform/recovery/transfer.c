@@ -4,7 +4,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <linux/fs.h>
+#include <linux/rtc.h>
 #include <linux/usb/functionfs.h>
 #include <poll.h>
 #include <signal.h>
@@ -13,7 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -23,7 +27,11 @@
 #ifndef STATE
 #define STATE "/run/tempo-recovery-state"
 #endif
-enum { INFO = 1, BEGIN_READ, BEGIN_WRITE, READ, WRITE, ACK, FINISH, CANCEL, CONTEXT, FILL, REBOOT };
+enum { INFO = 1, BEGIN_READ, BEGIN_WRITE, READ, WRITE, ACK, FINISH, CANCEL, CONTEXT, FILL, REBOOT, SETUP, TIME };
+#define SETUP_LIMIT 65536
+/* Plausible clock values: after this code was written, before 2100. */
+#define TIME_MIN 1577836800ull
+#define TIME_MAX 4102444800ull
 struct __attribute__((packed)) header {
   char magic[8];
   uint32_t op, status;
@@ -211,6 +219,133 @@ static int io_at(int fd, void *data, size_t size, uint64_t offset,
   }
   return 0;
 }
+/* The Tempo layout exposes the root filesystem as the first MBR partition.
+   The host says where it expects that partition; nothing is mounted unless
+   the table on storage agrees, so a foreign image is left alone. */
+static int rootfs_partition(uint64_t offset, uint64_t length) {
+  unsigned long long start = 0, size = 0;
+  FILE *f = fopen("/sys/class/block/mmcblk0p1/start", "r");
+  if (!f)
+    return -1;
+  int ok = fscanf(f, "%llu", &start) == 1;
+  fclose(f);
+  f = fopen("/sys/class/block/mmcblk0p1/size", "r");
+  if (!f)
+    return -1;
+  ok = ok && fscanf(f, "%llu", &size) == 1;
+  fclose(f);
+  return ok && start * 512 == offset && size * 512 >= length ? 0 : -1;
+}
+static int read_only(const char *path, int value) {
+  int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0)
+    return -1;
+  int failed = ioctl(fd, BLKROSET, &value);
+  close(fd);
+  return failed;
+}
+static int write_file(const char *path, const void *data, size_t size) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+                0600);
+  if (fd < 0)
+    return -1;
+  const unsigned char *p = data;
+  while (size) {
+    ssize_t n = write(fd, p, size);
+    if (n < 0 && errno == EINTR)
+      continue;
+    if (n <= 0) {
+      close(fd);
+      return -1;
+    }
+    p += n;
+    size -= n;
+  }
+  int failed = fsync(fd) || fchmod(fd, 0600);
+  return close(fd) || failed ? -1 : 0;
+}
+/* Writes the first-run configuration into the root filesystem, mounted for
+   this request only; storage goes back to read-only either way. The host
+   names the partition it flashed, and the table just written is re-read
+   before the two are compared. */
+static int setup(uint32_t op, uint64_t offset, uint64_t length, uint32_t size) {
+  const char *root = "/mnt/rootfs", *device = "/dev/mmcblk0p1";
+  const char *problem = NULL;
+  if (test_mode) {
+    root = getenv("TEMPO_RECOVERY_TEST_ROOTFS");
+    if (!root)
+      return failure(op, "No test root filesystem");
+  } else {
+    int whole = open(paths[0], O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (whole < 0)
+      return failure(op, "Cannot open storage");
+    ioctl(whole, BLKRRPART);
+    close(whole);
+    for (int i = 0; i < 50 && access(device, F_OK); i++)
+      usleep(100000);
+    if (rootfs_partition(offset, length))
+      return failure(op, "Storage has no Tempo root filesystem");
+    if (read_only(paths[0], 0) || read_only(device, 0))
+      problem = "Storage write lock failed";
+    else if ((mkdir("/mnt", 0755) && errno != EEXIST) ||
+             (mkdir(root, 0755) && errno != EEXIST) ||
+             mount(device, root, "ext4", MS_NOATIME, NULL))
+      problem = "Cannot mount the root filesystem";
+    if (problem) {
+      read_only(device, 1);
+      read_only(paths[0], 1);
+      return failure(op, problem);
+    }
+  }
+  state("flash", context_title[0] ? context_title : "Writing device setup",
+        context_detail, 1);
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/first-run-config.json", root);
+  if (write_file(path, buffer, size))
+    problem = "Cannot write the device setup";
+  if (!test_mode) {
+    sync();
+    if (umount(root) && !problem)
+      problem = "Cannot unmount the root filesystem";
+    read_only(device, 1);
+    read_only(paths[0], 1);
+  }
+  if (problem)
+    return failure(op, problem);
+  state("complete", "Device setup saved", "", 1);
+  context_title[0] = context_detail[0] = 0;
+  return reply(op, 0, NULL, 0);
+}
+/* Sets the system clock and the battery-backed clock to UTC seconds, so a
+   freshly flashed player boots knowing the time. */
+static int set_time(uint32_t op, uint64_t seconds) {
+  if (seconds < TIME_MIN || seconds > TIME_MAX)
+    return failure(op, "Invalid time");
+  if (!test_mode) {
+    struct timeval tv = {.tv_sec = (time_t)seconds, .tv_usec = 0};
+    if (settimeofday(&tv, NULL))
+      return failure(op, "Cannot set the system clock");
+    time_t t = (time_t)seconds;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    struct rtc_time rt = {.tm_sec = tm.tm_sec,
+                          .tm_min = tm.tm_min,
+                          .tm_hour = tm.tm_hour,
+                          .tm_mday = tm.tm_mday,
+                          .tm_mon = tm.tm_mon,
+                          .tm_year = tm.tm_year,
+                          .tm_wday = tm.tm_wday,
+                          .tm_yday = tm.tm_yday,
+                          .tm_isdst = 0};
+    int rtc = open("/dev/rtc0", O_WRONLY | O_CLOEXEC);
+    int failed = rtc < 0 || ioctl(rtc, RTC_SET_TIME, &rt);
+    if (rtc >= 0)
+      close(rtc);
+    if (failed)
+      return failure(op, "Cannot set the hardware clock");
+  }
+  return reply(op, 0, NULL, 0);
+}
 static int serve(void) {
   for (;;) {
     struct header h;
@@ -231,7 +366,7 @@ static int serve(void) {
         return -1;
       continue;
     }
-    if (op != WRITE && op != CONTEXT && op != FILL && size) {
+    if (op != WRITE && op != CONTEXT && op != FILL && op != SETUP && size) {
       if (failure(op, "Unexpected payload"))
         return -1;
       continue;
@@ -248,6 +383,24 @@ static int serve(void) {
           if (reboot(RB_AUTOBOOT)) return -1;
         }
       }
+    } else if (op == SETUP) {
+      if (disk >= 0)
+        result = failure(op, "Operation already active");
+      else if (region || flags || !size || size > SETUP_LIMIT ||
+               offset % 512 || !length || length % 512 ||
+               memchr(buffer, 0, size))
+        result = failure(op, "Invalid setup request");
+      else if (mounted())
+        result = failure(op, "Storage is mounted");
+      else
+        result = setup(op, offset, length, size);
+    } else if (op == TIME) {
+      if (disk >= 0)
+        result = failure(op, "Operation already active");
+      else if (region || flags || length)
+        result = failure(op, "Invalid time request");
+      else
+        result = set_time(op, offset);
     } else if (op == CONTEXT) {
       unsigned char *split = memchr(buffer, '\n', size);
       int valid = disk < 0 && split && split > buffer &&
@@ -276,7 +429,7 @@ static int serve(void) {
         }
         char json[512];
         int n = snprintf(json, sizeof(json),
-                         "{\"version\":1,\"context\":true,\"fill\":true,\"reboot\":true,\"max_chunk\":%u,\"regions\":[{\"id\":"
+                         "{\"version\":1,\"context\":true,\"fill\":true,\"reboot\":true,\"setup\":true,\"time\":true,\"max_chunk\":%u,\"regions\":[{\"id\":"
                          "0,\"name\":\"user\",\"size\":%" PRIu64
                          "},{\"id\":1,\"name\":\"boot0\",\"size\":%" PRIu64
                          "},{\"id\":2,\"name\":\"boot1\",\"size\":%" PRIu64

@@ -8,8 +8,9 @@ with tempfile.TemporaryDirectory() as directory:
     original=bytes(range(256))*4096
     for image in images: image.write_bytes(original*2)
     binary=d/'service'
+    rootfs=d/'rootfs'; rootfs.mkdir()
     subprocess.run(['cc','-D_FILE_OFFSET_BITS=64',f'-DSTATE="{d}/state"','-std=c11','-O2','-Wall','-Wextra','-Werror',str(root/'platform/recovery/transfer.c'),'-o',str(binary)],check=True)
-    p=subprocess.Popen([str(binary),'--test-stdio',*map(str,images)],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+    p=subprocess.Popen([str(binary),'--test-stdio',*map(str,images)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,env={**os.environ,'TEMPO_RECOVERY_TEST_ROOTFS':str(rootfs)})
     def exact(n):
         result=b''
         while len(result)<n:
@@ -76,6 +77,28 @@ with tempfile.TemporaryDirectory() as directory:
         command(5,length=512,data=before[:512])
         command(7)
         command(1)  # A protocol failure must not poison the next operation.
+        # Device setup lands in the root filesystem, private to root; the
+        # clock takes only plausible times. Neither runs during a transfer.
+        assert b'"setup":true' in command(1)[1] and b'"time":true' in command(1)[1]
+        command(9,data=b'Writing device setup\nSaving first-run choices')
+        command(12,offset=0x5180000,length=1<<20,data=b'{"hostname":"y2"}')
+        setup=rootfs/'first-run-config.json'
+        assert setup.read_bytes()==b'{"hostname":"y2"}' and setup.stat().st_mode&0o777==0o600
+        assert (d/'state').read_text().splitlines()[2]=='Device setup saved'
+        command(12,offset=0x5180000,length=1<<20,valid=False)
+        command(12,offset=0x5180000,length=1<<20,data=b'{"a":"\0"}',valid=False)
+        command(12,offset=0x5180000,length=1<<20,data=b'{}',region=1,valid=False)
+        command(12,offset=100,length=1<<20,data=b'{}',valid=False)
+        command(12,offset=0x5180000,length=0,data=b'{}',valid=False)
+        command(2,length=1024)
+        command(12,offset=0x5180000,length=1<<20,data=b'{}',valid=False)
+        command(8)
+        assert setup.read_bytes()==b'{"hostname":"y2"}'
+        command(13,offset=1_700_000_000)
+        command(13,offset=100,valid=False)
+        command(13,offset=1_700_000_000,length=512,valid=False)
+        command(13,offset=1_700_000_000,data=b'x',valid=False)
+        command(1)
         # Partial stream must never be accepted as a completed write.
         command(3,length=512)
         p.stdin.write(HEADER.pack(b'TEMPREC1',5,0,0,512,512,zlib.crc32(b'Q'*512),0,0)+b'Q'*100)

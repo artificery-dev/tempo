@@ -10,6 +10,7 @@ import 'toolbox_controller.dart';
 import 'firmware_drop.dart';
 import 'workflow_layout.dart';
 
+import 'package:tempo_usb/tempo_usb.dart' show DeviceSetup;
 import 'package:tomeui/tomeui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -86,6 +87,9 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
   @override
   void initState() {
     super.initState();
+    for (final key in DeviceSetup.labels.keys) {
+      _setupFields[key] = TextEditingController(text: _setupText(key));
+    }
     _syncRoute();
   }
 
@@ -131,9 +135,34 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     context.go('/${section.name}');
   }
 
+  /// One editor per Device Setup field, seeded from the shared model so
+  /// the text survives leaving and returning to the page.
+  final _setupFields = <String, TextEditingController>{};
+  String _setupText(String key) => switch (key) {
+    'username' => model.deviceSetup.username,
+    'password' => model.deviceSetup.password,
+    'hostname' => model.deviceSetup.hostname,
+    'timezone' => model.deviceSetup.timezone,
+    'locale' => model.deviceSetup.locale,
+    _ => model.deviceSetup.sshKeys,
+  };
+  void _readDeviceSetup() => model.setDeviceSetup(
+    DeviceSetup(
+      username: _setupFields['username']!.text,
+      password: _setupFields['password']!.text,
+      hostname: _setupFields['hostname']!.text,
+      timezone: _setupFields['timezone']!.text,
+      locale: _setupFields['locale']!.text,
+      sshKeys: _setupFields['ssh_keys']!.text,
+    ),
+  );
+
   @override
   void dispose() {
     _scroll.dispose();
+    for (final field in _setupFields.values) {
+      field.dispose();
+    }
     super.dispose();
   }
 
@@ -1037,6 +1066,13 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                     'Preloader protection',
                     model.allowPreloaderFlash ? 'Disabled' : 'Enabled',
                   ),
+                  if (model.deviceSetupAvailable)
+                    (
+                      'Device setup',
+                      model.deviceSetup.isEmpty
+                          ? 'Asked on the player'
+                          : model.deviceSetup.configured.join(', '),
+                    ),
                 ],
                 (
                   'Reboot after success',
@@ -1286,6 +1322,28 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
             ],
           ),
         ),
+      if (model.deviceSetupAvailable) ...[
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Button(
+            key: const ValueKey('device-setup'),
+            onPressed: model.busy
+                ? null
+                : () => model.updateUi(
+                    () => model.deviceSetupOpen = !model.deviceSetupOpen,
+                  ),
+            variant: SurfaceVariant.ghost,
+            leading: const Icon(LucideIcons.userCog),
+            center: const Text('Device Setup'),
+            trailing: Icon(
+              model.deviceSetupOpen
+                  ? LucideIcons.chevronUp
+                  : LucideIcons.chevronDown,
+            ),
+          ),
+        ),
+        if (model.deviceSetupOpen) _deviceSetupCard(),
+      ],
       Align(
         alignment: Alignment.centerLeft,
         child: Button(
@@ -1396,6 +1454,57 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
         ),
     ],
   );
+
+  /// First-run choices, any or all: filled in here, the player does not
+  /// ask for them; left blank, it does.
+  Widget _deviceSetupCard() {
+    final problems = model.deviceSetup.validate();
+    Widget field(
+      String key, {
+      String? hint,
+      String? help,
+      bool obscure = false,
+      int lines = 1,
+    }) => TextField(
+      key: ValueKey('device-setup-$key'),
+      controller: _setupFields[key],
+      label: Text(DeviceSetup.labels[key]!),
+      placeholder: hint == null ? null : Text(hint),
+      helper: help == null ? null : Text(help),
+      error: problems[key] == null ? null : Text(problems[key]!),
+      obscureText: obscure,
+      maxLines: lines,
+      minLines: lines,
+      enabled: !model.busy,
+      onChanged: (_) => _readDeviceSetup(),
+    );
+    return Card(
+      variant: SurfaceVariant.subtle,
+      header: const TitleText('Device Setup'),
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: 12,
+        children: [
+          const CaptionText(
+            'Fill in any of these and the player will not ask for them on its first start. Whatever is left blank, it asks for there.',
+          ),
+          field('username', hint: 'tempo'),
+          field('password', obscure: true),
+          field('hostname', hint: 'y2'),
+          field('timezone', hint: 'Europe/Berlin'),
+          field('locale', hint: 'en_US.UTF-8'),
+          field(
+            'ssh_keys',
+            lines: 3,
+            help: 'Public keys, one per line, for logging in over USB.',
+          ),
+          const CaptionText(
+            'The password reaches the player only as a hash. The player’s clock is set from this computer either way.',
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _operationCard() {
     final flashing = model.task == 'Flash' || model.task == 'Restore';

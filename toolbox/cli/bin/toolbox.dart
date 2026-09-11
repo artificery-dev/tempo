@@ -192,14 +192,26 @@ Future<void> main(List<String> arguments) async {
         final yes = args.remove('--yes');
         final preloader = args.remove('--allow-preloader');
         final resume = args.remove('--resume');
+        final setupFile = option('--setup');
         if (args.length != 1 || !yes)
           throw ArgumentError(
-            'Usage: toolbox install FILE --yes [--allow-preloader] [--resume]',
+            'Usage: toolbox install FILE --yes [--allow-preloader] [--resume] [--setup SETUP.json]',
           );
+        // The setup file names first-run choices as the Device Setup
+        // section takes them: username, password, hostname, timezone,
+        // locale, ssh_keys. The password is hashed before it is written.
+        final setup = setupFile == null
+            ? null
+            : DeviceSetup.fromJson(
+                (jsonDecode(await File(setupFile).readAsString())
+                        as Map<String, Object?>?) ??
+                    (throw ArgumentError('Setup file must be a JSON object')),
+              );
         result = await operations.install(
           args.single,
           allowPreloader: preloader,
           resume: resume,
+          setup: setup,
           onEvent: progress,
         );
       default:

@@ -21,10 +21,14 @@ Connect the powered-off Y2. Existing output files are refused.''',
 Restore a gzip backup or legacy MTK directory after complete input validation.
 --resume compares existing destination chunks before writing.
 BOOT1 is preserved unless --allow-preloader is explicit. RPMB is never restored.''',
-  'install': '''Usage: toolbox install FILE --yes [--resume] [--allow-preloader]
+  'install':
+      '''Usage: toolbox install FILE --yes [--resume] [--allow-preloader] [--setup SETUP.json]
 Validate a .y2-firmware package, write its declared regions and verify readback.
 --resume skips destination chunks only after checksum comparison.
-Preloader writes require both package declaration and --allow-preloader.''',
+Preloader writes require both package declaration and --allow-preloader.
+--setup writes first-run choices into the flashed root filesystem: a JSON
+object with any of username, password, hostname, timezone, locale, ssh_keys.
+The password is hashed before it is written; the player asks for the rest.''',
   'inspect': '''Usage: toolbox inspect FILE
 Validate a .y2-firmware package and report its contents without opening USB.''',
   'inspect-raw': '''Usage: toolbox inspect-raw BOOTIMG|LOGO|BOOT1 FILE

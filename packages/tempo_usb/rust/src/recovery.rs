@@ -20,6 +20,10 @@ const CANCEL: u32 = 8;
 const CONTEXT: u32 = 9;
 const FILL: u32 = 10;
 const REBOOT: u32 = 11;
+const SETUP: u32 = 12;
+const TIME: u32 = 13;
+/// The most a first-run configuration may weigh on the wire.
+const SETUP_LIMIT: usize = 65536;
 
 fn crc(data: &[u8]) -> u32 {
     let mut table = [0u32; 256];
@@ -174,6 +178,8 @@ pub struct Client<T: BulkTransport> {
     context_supported: bool,
     fill_supported: bool,
     reboot_supported: bool,
+    setup_supported: bool,
+    time_supported: bool,
 }
 impl<T: BulkTransport> Client<T> {
     pub fn new(transport: T) -> Self {
@@ -183,6 +189,8 @@ impl<T: BulkTransport> Client<T> {
             context_supported: false,
             fill_supported: false,
             reboot_supported: false,
+            setup_supported: false,
+            time_supported: false,
         }
     }
     fn command(
@@ -235,7 +243,39 @@ impl<T: BulkTransport> Client<T> {
         self.context_supported = info["context"].as_bool() == Some(true);
         self.fill_supported = info["fill"].as_bool() == Some(true);
         self.reboot_supported = info["reboot"].as_bool() == Some(true);
+        self.setup_supported = info["setup"].as_bool() == Some(true);
+        self.time_supported = info["time"].as_bool() == Some(true);
         Ok(info)
+    }
+    /// Writes the first-run configuration into the root filesystem that was
+    /// just flashed: the recovery mounts the partition the Tempo layout put
+    /// at `offset`, refusing anything else, and unmounts it again.
+    pub fn write_setup(&mut self, offset: u64, length: u64, document: &[u8]) -> Result<()> {
+        if !self.setup_supported {
+            return Err(
+                "This recovery version cannot write device setup; update the Toolbox".into(),
+            );
+        }
+        if self.active {
+            return Err("Cannot write device setup during a transfer".into());
+        }
+        if document.is_empty() || document.len() > SETUP_LIMIT || document.contains(&0) {
+            return Err("Invalid device setup document".into());
+        }
+        self.command(SETUP, Region::User, offset, length, 0, document)?;
+        Ok(())
+    }
+    /// Sets the player's clocks to UTC seconds. False when the recovery is
+    /// too old to do so.
+    pub fn set_time(&mut self, unix_seconds: u64) -> Result<bool> {
+        if !self.time_supported {
+            return Ok(false);
+        }
+        if self.active {
+            return Err("Cannot set the clock during a transfer".into());
+        }
+        self.command(TIME, Region::User, unix_seconds, 0, 0, &[])?;
+        Ok(true)
     }
     pub fn set_context(&mut self, title: &str, detail: &str) -> Result<()> {
         if !self.context_supported {
@@ -501,6 +541,50 @@ mod tests {
                 if supported { 4 } else { 512 }
             );
         }
+    }
+    #[test]
+    fn setup_and_time_need_a_recovery_that_offers_them() {
+        let old = response(INFO, 0, b"{}");
+        let mut c = Client::new(Fake {
+            input: std::io::Cursor::new(old),
+            sent: vec![],
+        });
+        c.info().unwrap();
+        assert!(
+            c.write_setup(0x5180000, 512, b"{}")
+                .unwrap_err()
+                .contains("recovery version")
+        );
+        assert!(!c.set_time(1_700_000_000).unwrap());
+        let new = [
+            response(INFO, 0, b"{\"setup\":true,\"time\":true}"),
+            response(SETUP, 0, &[]),
+            response(TIME, 0, &[]),
+        ]
+        .concat();
+        let mut c = Client::new(Fake {
+            input: std::io::Cursor::new(new),
+            sent: vec![],
+        });
+        c.info().unwrap();
+        assert!(c.write_setup(0x5180000, 512, b"{\"a\":\"\0\"}").is_err());
+        c.write_setup(0x5180000, 512, b"{\"hostname\":\"y2\"}")
+            .unwrap();
+        assert!(c.set_time(1_700_000_000).unwrap());
+        let sent = &c.transport.sent;
+        let setup = &sent[48..];
+        assert_eq!(u32::from_le_bytes(setup[8..12].try_into().unwrap()), SETUP);
+        assert_eq!(
+            u64::from_le_bytes(setup[16..24].try_into().unwrap()),
+            0x5180000
+        );
+        assert_eq!(&setup[48..48 + 17], b"{\"hostname\":\"y2\"}");
+        let time = &setup[48 + 17..];
+        assert_eq!(u32::from_le_bytes(time[8..12].try_into().unwrap()), TIME);
+        assert_eq!(
+            u64::from_le_bytes(time[16..24].try_into().unwrap()),
+            1_700_000_000
+        );
     }
     #[test]
     fn rejects_oversized_response() {

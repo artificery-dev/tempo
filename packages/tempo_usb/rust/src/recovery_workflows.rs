@@ -8,7 +8,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::{Value, json};
@@ -144,6 +144,22 @@ impl Write for Compare<'_> {
         Ok(())
     }
 }
+/// Puts the player's clocks right from this computer's, so a fresh image
+/// boots knowing the time. A recovery too old to do so is left alone; a
+/// refusal is reported but does not fail the flash.
+fn set_clock(client: &mut Client<UsbBulk>) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match client.set_time(now) {
+        Ok(true) => emit(json!({"event":"clock-set","message":"Set the player's clock."})),
+        Ok(false) => {}
+        Err(e) => emit(
+            json!({"event":"warning","message":format!("Could not set the player's clock: {e}. It will ask for the time on first run.")}),
+        ),
+    }
+}
 fn finish_device(client: &mut Client<UsbBulk>, reboot: bool) -> String {
     if !reboot {
         return "The player remains in Tempo Recovery.".into();
@@ -176,16 +192,31 @@ pub fn run(args: &[String], cancel: Arc<AtomicBool>) -> Result<Value> {
     }
     let operation = args[0].as_str();
     let path = Path::new(&args[1]);
-    let allow = args[2..].iter().any(|a| a == "--allow-preloader");
-    let verify_write = !args[2..].iter().any(|a| a == "--no-verify");
-    let reboot = !args[2..].iter().any(|a| a == "--no-reboot");
-    let resume = args[2..].iter().any(|a| a == "--resume");
-    if args[2..].iter().any(|a| {
+    let mut options = args[2..].to_vec();
+    let setup = match options.iter().position(|a| a == "--setup") {
+        Some(index) if index + 1 < options.len() => {
+            options.remove(index);
+            Some(PathBuf::from(options.remove(index)))
+        }
+        Some(_) => return Err("--setup needs a file".into()),
+        None => None,
+    };
+    let allow = options.iter().any(|a| a == "--allow-preloader");
+    let verify_write = !options.iter().any(|a| a == "--no-verify");
+    let reboot = !options.iter().any(|a| a == "--no-reboot");
+    let resume = options.iter().any(|a| a == "--resume");
+    if options.iter().any(|a| {
         a != "--allow-preloader" && a != "--resume" && a != "--no-verify" && a != "--no-reboot"
     }) || !matches!(operation, "backup" | "restore" | "flash")
     {
         return Err("Invalid recovery workflow arguments".into());
     }
+    if setup.is_some() && operation != "flash" {
+        return Err("Device setup applies to a firmware flash only".into());
+    }
+    // Checked before anything else happens: a mistyped account name should
+    // not cost a flash.
+    let setup = setup.map(|path| crate::setup::load(&path)).transpose()?;
     if operation == "backup" {
         if allow || resume || !verify_write {
             return Err("Write flags are not valid for backup".into());
@@ -255,6 +286,22 @@ pub fn run(args: &[String], cancel: Arc<AtomicBool>) -> Result<Value> {
     if plan.is_empty() {
         return Err("No writable ranges selected".into());
     }
+    // The setup goes into the root filesystem this package lays down, at
+    // the partition the recovery will find it in.
+    let rootfs = package
+        .manifest
+        .images
+        .iter()
+        .flat_map(|image| &image.writes)
+        .find(|w| w.name == "rootfs" && w.region == firmware::Region::User)
+        .map(|w| (w.target_offset, w.length));
+    let setup = match (setup, rootfs) {
+        (Some(setup), Some(rootfs)) => Some((setup, rootfs)),
+        (Some(_), None) => {
+            return Err("This package has no Tempo root filesystem to set up".into());
+        }
+        (None, _) => None,
+    };
     plan.sort_by_key(|w| w.region == firmware::Region::Boot1);
     let boot: Vec<_> = plan
         .iter()
@@ -365,8 +412,17 @@ pub fn run(args: &[String], cancel: Arc<AtomicBool>) -> Result<Value> {
         )?;
         base += w.length;
     }
+    if let Some((document, (offset, length))) = &setup {
+        client.set_context(
+            "Writing device setup",
+            "Saving first-run choices to the root filesystem",
+        )?;
+        emit(json!({"event":"setup-started","message":"Writing device setup…"}));
+        client.write_setup(*offset, *length, document)?;
+    }
+    set_clock(&mut client);
     let disposition = finish_device(&mut client, reboot);
     Ok(
-        json!({"event":"result","flashed":true,"report":{"compatible_chip":true,"flash_verified":verify_write,"storage_written":true},"verified_bytes":if verify_write {total} else {0},"message":format!("{} {disposition}", if verify_write {"Transfer verified."} else {"Transfer complete without readback verification."})}),
+        json!({"event":"result","flashed":true,"setup":setup.is_some(),"report":{"compatible_chip":true,"flash_verified":verify_write,"storage_written":true},"verified_bytes":if verify_write {total} else {0},"message":format!("{} {disposition}", if verify_write {"Transfer verified."} else {"Transfer complete without readback verification."})}),
     )
 }

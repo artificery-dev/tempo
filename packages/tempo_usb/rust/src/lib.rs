@@ -17,6 +17,8 @@ pub mod recovery_workflows;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod restore;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod setup;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sparse_image;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod spft;

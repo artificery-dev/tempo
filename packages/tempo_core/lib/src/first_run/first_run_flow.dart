@@ -166,7 +166,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   List<FirstRunStep> get _steps => [
     FirstRunStep.welcome,
-    FirstRunStep.language,
+    if (!widget.state.has('locale')) FirstRunStep.language,
     if (!widget.state.has('timezone')) FirstRunStep.timeZone,
     if (widget.services.radios != null) FirstRunStep.wifi,
     if (!_wifiConnected && !_clockTrusted) FirstRunStep.clock,

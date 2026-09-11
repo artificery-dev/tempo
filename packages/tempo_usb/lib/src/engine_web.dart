@@ -1,5 +1,6 @@
 import 'dart:js_interop';
 import 'browser/js.dart';
+import 'device_setup.dart';
 import 'browser/session.dart';
 import 'browser/storage.dart';
 
@@ -18,6 +19,10 @@ class UsbEngine {
   bool useLegacyDownloadAgent = false;
   bool verifyWrites = true;
   bool rebootAfterSuccess = true;
+
+  /// First-run choices for the flasher; the browser cannot carry them, as
+  /// they travel through Tempo Recovery.
+  DeviceSetup? deviceSetup;
   final bool isWeb = true;
   BrowserSession? _usb, _serial;
   BackupDestination? _backup;
@@ -142,6 +147,9 @@ class UsbEngine {
       );
     }
     if (resume) throw UnsupportedError('Resume requires native Toolbox.');
+    if (deviceSetup != null && !deviceSetup!.isEmpty) {
+      throw UnsupportedError('Device setup requires the desktop Toolbox.');
+    }
     await _usb?.choose(_operation(backup, flash, allowPreloader));
   }
 
@@ -157,6 +165,9 @@ class UsbEngine {
       );
     }
     if (resume) throw UnsupportedError('Resume requires native Toolbox.');
+    if (deviceSetup != null && !deviceSetup!.isEmpty) {
+      throw UnsupportedError('Device setup requires the desktop Toolbox.');
+    }
     await _serial?.choose(_operation(backup, flash, allowPreloader));
   }
 

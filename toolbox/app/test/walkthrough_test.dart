@@ -268,6 +268,26 @@ void main() {
     expect(model.verifyWrites, isTrue);
     await tap(find.byKey(const ValueKey('verify-written-data')));
     expect(model.verifyWrites, isFalse);
+    // First-run choices sit in their own collapsed section above Advanced.
+    expect(find.text('Device Setup'), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-setup-hostname')), findsNothing);
+    await tap(find.byKey(const ValueKey('device-setup')));
+    await tester.enterText(
+      find.byKey(const ValueKey('device-setup-hostname')),
+      '-y2',
+    );
+    await tester.pumpAndSettle();
+    expect(model.deviceSetup.hostname, '-y2');
+    expect(find.textContaining('starting with a letter'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('device-setup-hostname')),
+      'my-y2',
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('starting with a letter'), findsNothing);
+    await tap(find.byKey(const ValueKey('device-setup')));
+    expect(find.byKey(const ValueKey('device-setup-hostname')), findsNothing);
+    expect(model.deviceSetup.hostname, 'my-y2');
     tester.view.physicalSize = const Size(320, 900);
     await tester.pumpAndSettle();
     await tap(find.text('Advanced'));
@@ -292,6 +312,8 @@ void main() {
     expect(find.text('Review flash'), findsOneWidget);
     expect(find.text('Skip matching data'), findsOneWidget);
     expect(find.text('Enabled'), findsNWidgets(3));
+    expect(find.text('Device setup'), findsOneWidget);
+    expect(find.text('Device name'), findsOneWidget);
     await tap(next);
     expect(find.text('Write options'), findsNothing);
     expect(find.text('Connect and flash'), findsOneWidget);

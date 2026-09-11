@@ -4,6 +4,7 @@ import 'package:tempo_logger/tempo_logger.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tempo_toolbox/engine_native.dart';
 import 'package:tempo_toolbox/toolbox_controller.dart';
+import 'package:tempo_usb/tempo_usb.dart' show DeviceSetup;
 
 class FakeUsbEngine extends UsbEngine {
   int connections = 0;
@@ -210,6 +211,35 @@ void main() {
       expect(history.sources, ['backup', 'flasher', 'restore']);
     },
   );
+
+  test('device setup reaches the engine for a Recovery flash only', () async {
+    final engine = FakeUsbEngine();
+    final model = ToolboxController(engine: engine);
+    await model.initialize();
+    model.selectTask('Flash');
+    await model.prepareFirmware();
+    model.setDeviceSetup(const DeviceSetup(hostname: 'y2'));
+    expect(model.deviceSetupAvailable, isTrue);
+    model.setDeviceSetup(const DeviceSetup(hostname: '-y2'));
+    await model.start();
+    expect(engine.connections, 0);
+    expect(model.phase, 'error');
+    expect(model.status, contains('device name'));
+    model.setDeviceSetup(const DeviceSetup(hostname: 'y2'));
+    await model.start();
+    expect(engine.connections, 1);
+    expect(engine.deviceSetup?.hostname, 'y2');
+    model.event({
+      'event': 'result',
+      'report': {'storage_written': true},
+    });
+    model.setLegacyDownloadAgent(true);
+    expect(model.deviceSetupAvailable, isFalse);
+    await model.start();
+    expect(engine.connections, 2);
+    expect(engine.deviceSetup, isNull);
+    model.dispose();
+  });
 
   test(
     'changing restore to flash invalidates the old preparation and write permission',
