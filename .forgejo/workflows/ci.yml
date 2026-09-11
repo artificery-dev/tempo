@@ -1012,24 +1012,23 @@ jobs:
           security list-keychains -d user -s login.keychain-db
           security delete-keychain "${{ steps.signing.outputs.keychain }}"
 
-  firmware:
-    name: Build firmware image
-    # The rootfs and the firmware image, from the components the other jobs
-    # built: the app, tempod, cadenced, the splash images, Recovery and the
-    # kernel all arrive as artifacts. What remains is what only makes sense
-    # against a rootfs: the system runtime, the Bluetooth bootstrap, the
-    # rootfs itself, the initramfs with its Plymouth payload, the boot image
-    # and the dist package. This runs the build tool's container steps
-    # directly, as root inside the toolchain image.
-    needs: [changes, toolchain, recovery, build-app, build-daemon, cadence, splash, kernel]
+  rootfs:
+    name: Build rootfs for the Y2
+    # The root filesystem is the slow half of the pipeline and only changes
+    # when its inputs do, so it is kept by content: the key is a hash of the
+    # git blobs (and submodule pins) of everything it is made from - the
+    # app, tempod, cadenced's pin, their packages, the rootfs and Bluetooth
+    # sources, the Plymouth theme, the toolchain, the build tool, the locks
+    # and this workflow. A hit re-publishes the kept image without building.
+    # Debian packages come from the network at build time, so a hit also
+    # freezes them until an input changes; bump the salt below to force a
+    # rebuild.
+    needs: [changes, toolchain, build-app, build-daemon, cadence]
     if: >-
       always() && needs.toolchain.result == 'success'
-      && needs.recovery.result == 'success'
       && needs.build-app.result == 'success'
       && needs.build-daemon.result == 'success'
       && needs.cadence.result == 'success'
-      && needs.splash.result == 'success'
-      && needs.kernel.result == 'success'
       && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 180
@@ -1055,11 +1054,32 @@ jobs:
         with:
           persist-credentials: false
           lfs: true
-          # The kernel and flutter-pi are submodules.
-          submodules: recursive
       - name: Trust the checkout and its SDK clones
         run: git config --global --add safe.directory '*'
+      - name: Compute the rootfs key from its inputs
+        id: key
+        run: |
+          set -eu
+          salt=1
+          inputs=$(git ls-files -s -- \
+            app assets daemon \
+            packages/tempo_core packages/player_api packages/daemon_client \
+            packages/tempo_logger packages/flutter_pi_plymouth_handoff \
+            packages/tempo_data packages/tempo_kms packages/tempo_build \
+            platform/rootfs platform/bluetooth platform/splash/plymouth \
+            platform/toolchain platform/firmware \
+            config.yaml pubspec.yaml pubspec.lock Cargo.toml Cargo.lock \
+            .gitmodules .forgejo/workflows/ci.yml \
+            | sha256sum | cut -c1-40)
+          echo "key=rootfs-$salt-$inputs" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore the rootfs
+        id: cache
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/rootfs-artifact
+          key: ${{ steps.key.outputs.key }}
       - name: Require the privileges a rootfs build needs
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -eu
           echo "uid $(id -u)"
@@ -1101,6 +1121,121 @@ jobs:
           chroot "$work" /busybox sh -c '/busybox true'
           rm -rf "$work"
           echo "binfmt_misc runs ARM programs and $device is free for the rootfs"
+      - name: Restore the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: https://code.forgejo.org/actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/sdks
+          key: flutter-sdks-${{ hashFiles('config.yaml', 'toolbox/app/.fvmrc') }}
+      - name: Provision the pinned Flutter SDKs
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sh .forgejo/sdks.sh
+      - name: Collect the Tempo app
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: tempo-app
+          path: build/dist
+      - name: Collect tempod
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: tempod-package
+          path: build/dist
+      - name: Collect the cadenced bundle
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: cadenced-bundle
+          path: build/os/cadence/armhf
+      - name: Unpack the component builds where the rootfs build expects them
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          tar -xzf build/dist/tempo-app-armhf.tar.gz -C build
+          mkdir -p build/os/daemon/arm/bundle
+          tar -xzf build/dist/tempod-*.tar.gz --strip-components=1 -C build/os/daemon/arm/bundle
+          rm build/dist/tempo-app-armhf.tar.gz build/dist/tempod-*.tar.gz
+          ls -la build/app build/os/daemon/arm/bundle
+      - name: Resolve the workspace
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get
+      - name: Fetch the flutter-pi engine binaries
+        # The app artifact leaves the engine out; it is a pinned download.
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi engine
+      - name: Verify and unpack the cadenced bundle
+        # The tarball is already in place, so this checks its pin and unpacks.
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
+      - name: Build the Bluetooth bootstrap and the system runtime
+        # On a developer machine the rootfs step does these before entering
+        # its container; here we are already inside it.
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd toolbox/cli
+          "$DART" run bin/toolbox.dart dev os bluetooth build
+          "$DART" run bin/toolbox.dart dev os runtime build
+      - name: Build the rootfs
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os rootfs build
+      - name: Pack the rootfs with what the firmware assembly reads from it
+        # The image is mostly holes; --sparse keeps them out of the archive.
+        # The Plymouth payload goes into the initramfs, the Bluetooth
+        # manifest into the dist provenance.
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          mkdir -p build/rootfs-artifact
+          tar --sparse -I 'zstd -T0' -cf build/rootfs-artifact/rootfs.tar.zst -C build \
+            $(cd build && ls os/rootfs/*.ext4) os/rootfs/plymouth-payload os/bluetooth/build-manifest.json
+          ls -la build/rootfs-artifact
+      - name: Save the rootfs
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: rootfs
+          path: build/rootfs-artifact/rootfs.tar.zst
+          retention-days: 30
+          if-no-files-found: error
+
+  firmware:
+    name: Assemble firmware image
+    # Everything arrives as an artifact: the rootfs, Recovery, the splash
+    # images and the kernel. What is made here needs a rootfs in hand and no
+    # privileges: the initramfs with its Plymouth payload, the boot image
+    # and the dist package. This runs the build tool's container steps
+    # directly, as root inside the toolchain image.
+    needs: [changes, toolchain, recovery, rootfs, splash, kernel]
+    if: >-
+      always() && needs.toolchain.result == 'success'
+      && needs.recovery.result == 'success'
+      && needs.rootfs.result == 'success'
+      && needs.splash.result == 'success'
+      && needs.kernel.result == 'success'
+      && needs.changes.outputs.firmware == 'true'
+    runs-on: linux-amd64-container
+    timeout-minutes: 60
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ secrets.CI_FORGEJO_REGISTRY_USERNAME || github.actor }}
+        password: ${{ secrets.CI_FORGEJO_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+    env:
+      TEMPO_TOOLCHAIN: '1'
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      DART_SUPPRESS_ANALYTICS: 'true'
+      TAR_OPTIONS: --no-same-owner
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          lfs: true
+          # The dist provenance records the kernel and flutter-pi pins.
+          submodules: recursive
+      - name: Trust the checkout and its SDK clones
+        run: git config --global --add safe.directory '*'
       - name: Determine package version
         run: echo "TEMPO_VERSION=$(sh .forgejo/version.sh)" >> "$GITHUB_ENV"
       - name: Restore the pinned Flutter SDKs
@@ -1115,21 +1250,11 @@ jobs:
         with:
           name: recovery-images
           path: build/recovery
-      - name: Collect the Tempo app
+      - name: Collect the rootfs
         uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
         with:
-          name: tempo-app
-          path: build/dist
-      - name: Collect tempod
-        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
-        with:
-          name: tempod-package
-          path: build/dist
-      - name: Collect the cadenced bundle
-        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
-        with:
-          name: cadenced-bundle
-          path: build/os/cadence/armhf
+          name: rootfs
+          path: build/rootfs-artifact
       - name: Collect the splash images
         uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
         with:
@@ -1140,13 +1265,11 @@ jobs:
         with:
           name: kernel
           path: build/os/kernel-artifact
-      - name: Unpack the component builds where the rootfs build expects them
+      - name: Unpack the rootfs and the kernel where the build tool expects them
         run: |
           set -eu
-          tar -xzf build/dist/tempo-app-armhf.tar.gz -C build
-          mkdir -p build/os/daemon/arm/bundle
-          tar -xzf build/dist/tempod-*.tar.gz --strip-components=1 -C build/os/daemon/arm/bundle
-          rm build/dist/tempo-app-armhf.tar.gz build/dist/tempod-*.tar.gz
+          tar --sparse -I zstd -xf build/rootfs-artifact/rootfs.tar.zst -C build
+          rm build/rootfs-artifact/rootfs.tar.zst
           kernel=build/os/kernel
           mkdir -p "$kernel/arch/arm/boot/dts/mediatek" "$kernel/usr"
           cp build/os/kernel-artifact/zImage "$kernel/arch/arm/boot/"
@@ -1155,24 +1278,9 @@ jobs:
           chmod +x "$kernel/usr/gen_init_cpio"
           cp build/os/kernel-artifact/tempo-source.json "$kernel/"
           cp build/os/kernel-artifact/kernel.config "$kernel/.config"
-          ls -la build/app build/os/daemon/arm/bundle build/os/splash "$kernel"
+          ls -la build/os/rootfs build/os/splash "$kernel"
       - name: Resolve the workspace
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get
-      - name: Fetch the flutter-pi engine binaries
-        # The app artifact leaves the engine out; it is a pinned download.
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi engine
-      - name: Verify and unpack the cadenced bundle
-        # The tarball is already in place, so this checks its pin and unpacks.
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
-      - name: Build the Bluetooth bootstrap and the system runtime
-        # On a developer machine the rootfs step does these before entering
-        # its container; here we are already inside it.
-        run: |
-          cd toolbox/cli
-          "$DART" run bin/toolbox.dart dev os bluetooth build
-          "$DART" run bin/toolbox.dart dev os runtime build
-      - name: Build the rootfs
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os rootfs build
       - name: Build the initramfs and pack the boot image
         # After the rootfs: the initramfs takes its Plymouth payload from it.
         run: |
