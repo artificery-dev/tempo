@@ -129,6 +129,10 @@ jobs:
           daemon=$(either "$check_daemon" "$platform")
           toolbox=$(either "$check_toolbox" "$platform")
           firmware=$(either "$app" "$daemon")
+          # The firmware image is assembled from the component builds, so
+          # every one of them runs whenever a new image is due.
+          app=$firmware
+          daemon=$firmware
           recovery=$(either "$firmware" "$toolbox")
           for name in check_app check_daemon check_toolbox app daemon toolbox platform firmware recovery; do
             eval "value=\$$name"
@@ -521,6 +525,13 @@ jobs:
         run: cd toolbox/cli && "$DART" pub get
       - name: Fetch the pinned cadenced release
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
+      - name: Save the cadenced bundle
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
+        with:
+          name: cadenced-bundle
+          path: build/os/cadence/armhf/*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
 
   build-toolbox:
     name: Build Toolbox for Linux
@@ -664,7 +675,7 @@ jobs:
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
-      && needs.changes.outputs.platform == 'true'
+      && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 30
     container:
@@ -701,15 +712,15 @@ jobs:
           if-no-files-found: error
 
   kernel:
-    name: Build kernel and boot image
-    # zImage, device tree and the initramfs packed into boot.img. Without a
-    # rootfs build the initramfs carries no Plymouth payload, so this proves
-    # the kernel and its configuration, not the shipping boot image.
+    name: Build kernel for the Y2
+    # zImage and the device tree. The initramfs takes its Plymouth payload
+    # from the rootfs, so the shipping boot image is packed by the firmware
+    # job; the boot.img made here proves the kernel and its configuration.
     needs: [changes, toolchain, toolchain-build]
     if: >-
       always() && needs.toolchain.result == 'success'
       && (needs.toolchain-build.result == 'success' || needs.toolchain-build.result == 'skipped')
-      && needs.changes.outputs.platform == 'true'
+      && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 180
     container:
@@ -737,11 +748,26 @@ jobs:
         run: cd toolbox/cli && "$DART" pub get
       - name: Build the kernel and boot image
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os kernel build
-      - name: Save the boot image
+      - name: Stage the kernel for the firmware image
+        # Artifacts keep neither file modes nor dot files, so the pieces the
+        # firmware job needs are staged flat: kernel, device tree, the cpio
+        # generator for the initramfs, and the provenance the dist manifest
+        # records.
+        run: |
+          set -eu
+          stage=build/os/kernel-artifact
+          mkdir -p "$stage"
+          cp build/os/kernel/arch/arm/boot/zImage \
+             build/os/kernel/arch/arm/boot/dts/mediatek/mt6582-innioasis-y2.dtb \
+             build/os/kernel/usr/gen_init_cpio \
+             build/os/kernel/tempo-source.json "$stage/"
+          cp build/os/kernel/.config "$stage/kernel.config"
+          ls -la "$stage"
+      - name: Save the kernel
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4 (Forgejo-patched; numbered tags are unpatched mirrors)
         with:
-          name: boot-image
-          path: build/os/kernel/boot.img
+          name: kernel
+          path: build/os/kernel-artifact
           retention-days: 30
           if-no-files-found: error
 
@@ -988,15 +1014,22 @@ jobs:
 
   firmware:
     name: Build firmware image
-    # The whole `toolbox dev build` sequence, minus the host checks that
-    # assume Podman on the outside: inside the toolchain image, as root,
-    # the build tool runs its container steps directly. Recovery comes
-    # from its own job; everything else is built here so that the image is
-    # made from exactly this commit.
-    needs: [changes, toolchain, recovery]
+    # The rootfs and the firmware image, from the components the other jobs
+    # built: the app, tempod, cadenced, the splash images, Recovery and the
+    # kernel all arrive as artifacts. What remains is what only makes sense
+    # against a rootfs: the system runtime, the Bluetooth bootstrap, the
+    # rootfs itself, the initramfs with its Plymouth payload, the boot image
+    # and the dist package. This runs the build tool's container steps
+    # directly, as root inside the toolchain image.
+    needs: [changes, toolchain, recovery, build-app, build-daemon, cadence, splash, kernel]
     if: >-
       always() && needs.toolchain.result == 'success'
       && needs.recovery.result == 'success'
+      && needs.build-app.result == 'success'
+      && needs.build-daemon.result == 'success'
+      && needs.cadence.result == 'success'
+      && needs.splash.result == 'success'
+      && needs.kernel.result == 'success'
       && needs.changes.outputs.firmware == 'true'
     runs-on: linux-amd64-container
     timeout-minutes: 180
@@ -1082,24 +1115,55 @@ jobs:
         with:
           name: recovery-images
           path: build/recovery
+      - name: Collect the Tempo app
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: tempo-app
+          path: build/dist
+      - name: Collect tempod
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: tempod-package
+          path: build/dist
+      - name: Collect the cadenced bundle
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: cadenced-bundle
+          path: build/os/cadence/armhf
+      - name: Collect the splash images
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: splash
+          path: build/os/splash
+      - name: Collect the kernel
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4 (Forgejo-patched)
+        with:
+          name: kernel
+          path: build/os/kernel-artifact
+      - name: Unpack the component builds where the rootfs build expects them
+        run: |
+          set -eu
+          tar -xzf build/dist/tempo-app-armhf.tar.gz -C build
+          mkdir -p build/os/daemon/arm/bundle
+          tar -xzf build/dist/tempod-*.tar.gz --strip-components=1 -C build/os/daemon/arm/bundle
+          rm build/dist/tempo-app-armhf.tar.gz build/dist/tempod-*.tar.gz
+          kernel=build/os/kernel
+          mkdir -p "$kernel/arch/arm/boot/dts/mediatek" "$kernel/usr"
+          cp build/os/kernel-artifact/zImage "$kernel/arch/arm/boot/"
+          cp build/os/kernel-artifact/mt6582-innioasis-y2.dtb "$kernel/arch/arm/boot/dts/mediatek/"
+          cp build/os/kernel-artifact/gen_init_cpio "$kernel/usr/"
+          chmod +x "$kernel/usr/gen_init_cpio"
+          cp build/os/kernel-artifact/tempo-source.json "$kernel/"
+          cp build/os/kernel-artifact/kernel.config "$kernel/.config"
+          ls -la build/app build/os/daemon/arm/bundle build/os/splash "$kernel"
       - name: Resolve the workspace
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev workspace get
-      - name: Fetch the flutter-pi engine and build the embedder
-        run: |
-          cd toolbox/cli
-          "$DART" run bin/toolbox.dart dev app flutter-pi engine
-          "$DART" run bin/toolbox.dart dev app flutter-pi build
-      - name: Build the app
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app build --release
-      - name: Build tempod
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev daemon build --target arm
-      - name: Fetch cadenced
+      - name: Fetch the flutter-pi engine binaries
+        # The app artifact leaves the engine out; it is a pinned download.
+        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev app flutter-pi engine
+      - name: Verify and unpack the cadenced bundle
+        # The tarball is already in place, so this checks its pin and unpacks.
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev cadence fetch
-      - name: Build the splash
-        run: |
-          cd toolbox/cli
-          "$DART" run bin/toolbox.dart dev os splash assets
-          "$DART" run bin/toolbox.dart dev os splash build
       - name: Build the Bluetooth bootstrap and the system runtime
         # On a developer machine the rootfs step does these before entering
         # its container; here we are already inside it.
@@ -1109,9 +1173,12 @@ jobs:
           "$DART" run bin/toolbox.dart dev os runtime build
       - name: Build the rootfs
         run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os rootfs build
-      - name: Build the kernel and boot image
-        # After the rootfs: the initramfs takes Plymouth from it.
-        run: cd toolbox/cli && "$DART" run bin/toolbox.dart dev os kernel build
+      - name: Build the initramfs and pack the boot image
+        # After the rootfs: the initramfs takes its Plymouth payload from it.
+        run: |
+          cd toolbox/cli
+          "$DART" run bin/toolbox.dart dev os initramfs build
+          "$DART" run bin/toolbox.dart dev os kernel bootimg
       - name: Assemble the firmware image
         run: |
           set -eu
