@@ -70,11 +70,24 @@ impl FirstRun {
         fields
     }
 
-    /// Records what the setup asks for, to be applied at the next boot.
+    /// Records what the setup asks for, to be applied at the next boot. A
+    /// `password` is hashed here and stored as `password_hash`: the file
+    /// only ever holds what `chpasswd -e` takes.
     pub fn queue(&self, pending: &Map<String, Value>) -> Result<(), String> {
         if self.done() {
             return Err("first run is already done".into());
         }
+        let mut pending = pending.clone();
+        if let Some(password) = pending.remove("password") {
+            let password = password
+                .as_str()
+                .filter(|p| !p.is_empty())
+                .ok_or("password is not a non-empty string")?;
+            let hash = sha_crypt::sha512_simple(password, &sha_crypt::Sha512Params::default())
+                .map_err(|e| format!("password hashing failed: {e:?}"))?;
+            pending.insert("password_hash".into(), Value::String(hash));
+        }
+        let pending = &pending;
         validate(pending)?;
         fs::DirBuilder::new()
             .recursive(true)
@@ -230,6 +243,22 @@ mod tests {
                 .queue(&object(r#"{"password_hash":"$y$j9T$abc"}"#))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn a_plain_password_is_hashed_before_it_touches_the_file() {
+        let (_dir, first_run) = fixture();
+        assert!(first_run.queue(&object(r#"{"password":""}"#)).is_err());
+        first_run
+            .queue(&object(r#"{"password":"correct horse"}"#))
+            .unwrap();
+        let text = fs::read_to_string(first_run.state.join("pending.json")).unwrap();
+        assert!(!text.contains("correct horse"), "{text}");
+        let written: Value = serde_json::from_str(&text).unwrap();
+        assert!(written.get("password").is_none());
+        let hash = written["password_hash"].as_str().unwrap();
+        assert!(hash.starts_with("$6$"), "{hash}");
+        assert!(sha_crypt::sha512_check("correct horse", hash).is_ok());
     }
 
     #[test]

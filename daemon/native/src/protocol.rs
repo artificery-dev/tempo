@@ -55,6 +55,9 @@ pub enum Op {
     /// `{"op":"first-run"}` asks where first run stands;
     /// `{"op":"first-run","pending":{...}}` queues what the setup chose.
     FirstRun(Option<Map<String, Value>>),
+    /// `{"op":"clock"[,"set":"YYYY-MM-DD HH:MM:SS"]}` -> whether the clock is
+    /// synchronised, and the time; `set` puts the clock right by hand.
+    Clock(Option<String>),
     /// Anything else, kept for the log line.
     Unknown(String),
 }
@@ -85,6 +88,8 @@ struct Request {
     seek: Option<i64>,
     // The first-run op's field.
     pending: Option<Map<String, Value>>,
+    // The clock op's field.
+    set: Option<String>,
 }
 
 /// Parse one request line (without its terminating newline). The error is
@@ -133,6 +138,7 @@ pub fn parse_request(line: &[u8]) -> Result<Op, String> {
             step: req.step,
         }),
         "first-run" => Op::FirstRun(req.pending),
+        "clock" => Op::Clock(req.set),
         other => Op::Unknown(other.to_string()),
     })
 }

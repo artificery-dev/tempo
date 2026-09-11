@@ -27,6 +27,7 @@ macro_rules! log {
 
 mod activation;
 mod bridge;
+mod clock;
 mod control;
 mod fdpass;
 mod first_run;
